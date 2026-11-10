@@ -3,7 +3,7 @@
 # agent-blindfold (Codename: Heart-Under-Blade / 刃下心)
 # Zero-trust local media privacy & anti-ban PreToolUse Hook
 # Supports: Google Antigravity & Claude Code (macOS / Linux / Git Bash)
-# Author: 琢玹 (zanex) - https://github.com/zanex
+# Author: 琢玹 (zanex-dev) - https://github.com/zanex-dev
 # License: MIT License - Copyright (c) 2026 琢玹 (zanex)
 # ==============================================================================
 

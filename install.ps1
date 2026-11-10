@@ -4,7 +4,7 @@
     One-click installer & uninstaller for agent-blindfold (Codename: Heart-Under-Blade)
     Supports Google Antigravity (Plugin + Hook + Rule) and Claude Code (Non-destructive settings.json merge).
 .AUTHOR
-    zanex - https://github.com/zanex
+    zanex-dev - https://github.com/zanex-dev
 #>
 
 param(

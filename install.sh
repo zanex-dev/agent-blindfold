@@ -2,7 +2,7 @@
 # ==============================================================================
 # One-click installer & uninstaller for agent-blindfold (Heart-Under-Blade / 刃下心)
 # Supports: Google Antigravity & Claude Code on macOS / Linux
-# Author: 琢玹 (zanex) - https://github.com/zanex
+# Author: 琢玹 (zanex-dev) - https://github.com/zanex-dev
 # ==============================================================================
 
 set -euo pipefail

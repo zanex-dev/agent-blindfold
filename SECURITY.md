@@ -25,4 +25,4 @@ Static command-string inspection on arbitrary Turing-complete shell execution (`
 
 ## Reporting a Vulnerability / Bypass
 
-If you discover a false-negative bypass (e.g., an unhandled tool parameter key, URI encoding trick, or shell one-liner that leaks media bytes in normal agent workflows), please open a GitHub Security Advisory or Issue on [github.com/zanex/agent-blindfold](https://github.com/zanex/agent-blindfold) with a minimal reproduction payload (without including private media).
+If you discover a false-negative bypass (e.g., an unhandled tool parameter key, URI encoding trick, or shell one-liner that leaks media bytes in normal agent workflows), please open a GitHub Security Advisory or Issue on [github.com/zanex-dev/agent-blindfold](https://github.com/zanex-dev/agent-blindfold) with a minimal reproduction payload (without including private media).

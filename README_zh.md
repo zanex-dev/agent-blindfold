@@ -8,7 +8,7 @@
 
 **项目代号：`Heart-Under-Blade` (`刃下心`)**
 
-[![CI](https://github.com/zanex/agent-blindfold/actions/workflows/ci.yml/badge.svg)](https://github.com/zanex/agent-blindfold/actions/workflows/ci.yml)
+[![CI](https://github.com/zanex-dev/agent-blindfold/actions/workflows/ci.yml/badge.svg)](https://github.com/zanex-dev/agent-blindfold/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-gold.svg)](./LICENSE)
 [![Antigravity](https://img.shields.io/badge/Google_Antigravity-原生插件与_Hook-4285F4.svg)](#快速开始与一键安装)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-PreToolUse_Hook-D97757.svg)](#快速开始与一键安装)
@@ -74,7 +74,7 @@ flowchart TD
 
 ### 1. 克隆仓库
 ```bash
-git clone https://github.com/zanex/agent-blindfold.git
+git clone https://github.com/zanex-dev/agent-blindfold.git
 cd agent-blindfold
 ```
 
