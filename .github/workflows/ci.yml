@@ -31,8 +31,10 @@ jobs:
       - name: Ensure Unix scripts are executable and LF-clean
         if: runner.os != 'Windows'
         run: |
-          chmod +x ./scripts/guard.sh ./install.sh
-          file ./scripts/guard.sh | grep -v "CRLF"
+          chmod +x ./scripts/guard.sh ./scripts/session_start.sh ./scripts/unlock.sh ./install.sh
+          for f in ./scripts/guard.sh ./scripts/session_start.sh ./scripts/unlock.sh ./install.sh; do
+            file "$f" | grep -v "CRLF"
+          done
 
       - name: Run Cross-Platform Security & Installer Test Suite
         run: python tests/run_tests.py

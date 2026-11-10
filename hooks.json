@@ -1,8 +1,15 @@
 {
   "agent-blindfold": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./scripts/session_start.ps1",
+        "timeout": 10
+      }
+    ],
     "PreToolUse": [
       {
-        "matcher": "read_file|view_file|read_resource|run_command|call_mcp_tool|mcp_markitdown_.*|mcp_filesystem_.*|mcp_playwright_browser_navigate|mcp_chrome.*navigate.*|Read|View|NotebookRead|Bash",
+        "matcher": "read_file|view_file|read_resource|write_file|write_to_file|edit_file|replace_file_content|multi_replace_file_content|generate_image|run_command|call_mcp_tool|mcp_.*|Read|View|NotebookRead|Write|Edit|MultiEdit|NotebookEdit|Bash",
         "hooks": [
           {
             "type": "command",

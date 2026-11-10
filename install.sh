@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# One-click installer & uninstaller for agent-blindfold (Heart-Under-Blade / 刃下心)
+# One-click installer & uninstaller for agent-blindfold v1.1 (Heart-Under-Blade / 刃下心)
 # Supports: Google Antigravity & Claude Code on macOS / Linux
 # Author: 琢玹 (zanex-dev) - https://github.com/zanex-dev
 # ==============================================================================
@@ -8,6 +8,9 @@
 set -euo pipefail
 
 TARGET="all"
+AUTO_GRANT="timed"
+DEFAULT_TTL="2h"
+EXPLICIT_POLICY=0
 UNINSTALL=0
 
 while [[ $# -gt 0 ]]; do
@@ -16,12 +19,22 @@ while [[ $# -gt 0 ]]; do
             TARGET="${2:-all}"
             shift 2
             ;;
+        --auto-grant)
+            AUTO_GRANT="${2:-timed}"
+            EXPLICIT_POLICY=1
+            shift 2
+            ;;
+        --ttl)
+            DEFAULT_TTL="${2:-2h}"
+            EXPLICIT_POLICY=1
+            shift 2
+            ;;
         --uninstall|-u)
             UNINSTALL=1
             shift
             ;;
         --help|-h)
-            echo "Usage: ./install.sh [--target all|antigravity|claude] [--uninstall]"
+            echo "Usage: ./install.sh [--target all|antigravity|claude] [--auto-grant timed|permanent|off] [--ttl 2h] [--uninstall]"
             exit 0
             ;;
         *)
@@ -31,8 +44,18 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+case "$AUTO_GRANT" in
+    timed|permanent|off) ;;
+    *)
+        echo "Invalid --auto-grant mode '$AUTO_GRANT' (must be timed, permanent, or off)." >&2
+        exit 1
+        ;;
+esac
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AGY_PLUGIN_DIR="${HOME}/.gemini/config/plugins/agent-blindfold"
+GEMINI_CONFIG_DIR="${HOME}/.gemini/config"
+POLICY_FILE="${GEMINI_CONFIG_DIR}/agent-blindfold.json"
+AGY_PLUGIN_DIR="${GEMINI_CONFIG_DIR}/plugins/agent-blindfold"
 CLAUDE_DIR="${HOME}/.claude"
 CLAUDE_HOOK_DIR="${CLAUDE_DIR}/hooks/agent-blindfold"
 CLAUDE_SETTINGS="${CLAUDE_DIR}/settings.json"
@@ -44,14 +67,39 @@ elif command -v python >/dev/null 2>&1; then
     PYTHON_BIN="python"
 fi
 
+if [[ "$UNINSTALL" -eq 0 && -z "$PYTHON_BIN" ]]; then
+    echo "[ERROR] Python 3 ('python3' or 'python') is required by agent-blindfold Unix hooks." >&2
+    exit 1
+fi
+
 echo "================================================================"
-echo "  agent-blindfold | Codename: Heart-Under-Blade (刃下心)"
+echo "  agent-blindfold v1.1 | Codename: Heart-Under-Blade (刃下心)"
 if [[ "$UNINSTALL" -eq 1 ]]; then
     echo "  Mode: UNINSTALL"
 else
-    echo "  Mode: INSTALL (Target: ${TARGET})"
+    echo "  Mode: INSTALL (Target: ${TARGET}, AutoGrant: ${AUTO_GRANT}, TTL: ${DEFAULT_TTL})"
 fi
 echo "================================================================"
+
+# ------------------------------------------------------------------------------
+# 0. Global SessionStart Auto-Exemption Policy (~/.gemini/config/agent-blindfold.json)
+# ------------------------------------------------------------------------------
+if [[ "$UNINSTALL" -eq 0 ]]; then
+    if [[ ! -f "$POLICY_FILE" || "$EXPLICIT_POLICY" -eq 1 ]]; then
+        mkdir -p "$GEMINI_CONFIG_DIR"
+        NOW_TS="$(date +%s)"
+        cat > "$POLICY_FILE" << EOF
+{
+  "sessionAutoGrant": "${AUTO_GRANT}",
+  "defaultTTL": "${DEFAULT_TTL}",
+  "updatedAt": ${NOW_TS}
+}
+EOF
+        echo "[+] Configured SessionStart auto-exemption policy (${AUTO_GRANT} / ${DEFAULT_TTL}): ${POLICY_FILE}"
+    else
+        echo "[i] Preserved existing SessionStart policy: ${POLICY_FILE}"
+    fi
+fi
 
 # ------------------------------------------------------------------------------
 # 1. Google Antigravity
@@ -67,17 +115,29 @@ if [[ "$TARGET" == "all" || "$TARGET" == "antigravity" ]]; then
     else
         mkdir -p "${AGY_PLUGIN_DIR}/scripts" "${AGY_PLUGIN_DIR}/rules"
         cp "${REPO_ROOT}/plugin.json" "${AGY_PLUGIN_DIR}/plugin.json"
+        cp "${REPO_ROOT}/blindfold-control.cmd" "${AGY_PLUGIN_DIR}/blindfold-control.cmd"
         cp "${REPO_ROOT}/rules/AGENTS.md" "${AGY_PLUGIN_DIR}/rules/AGENTS.md"
         cp "${REPO_ROOT}/scripts/guard.sh" "${AGY_PLUGIN_DIR}/scripts/guard.sh"
         cp "${REPO_ROOT}/scripts/guard.ps1" "${AGY_PLUGIN_DIR}/scripts/guard.ps1"
-        chmod +x "${AGY_PLUGIN_DIR}/scripts/guard.sh"
+        cp "${REPO_ROOT}/scripts/session_start.sh" "${AGY_PLUGIN_DIR}/scripts/session_start.sh"
+        cp "${REPO_ROOT}/scripts/session_start.ps1" "${AGY_PLUGIN_DIR}/scripts/session_start.ps1"
+        cp "${REPO_ROOT}/scripts/unlock.sh" "${AGY_PLUGIN_DIR}/scripts/unlock.sh"
+        cp "${REPO_ROOT}/scripts/unlock.ps1" "${AGY_PLUGIN_DIR}/scripts/unlock.ps1"
+        chmod +x "${AGY_PLUGIN_DIR}/scripts/guard.sh" "${AGY_PLUGIN_DIR}/scripts/session_start.sh" "${AGY_PLUGIN_DIR}/scripts/unlock.sh"
 
         cat > "${AGY_PLUGIN_DIR}/hooks.json" << 'EOF'
 {
   "agent-blindfold": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "./scripts/session_start.sh",
+        "timeout": 10
+      }
+    ],
     "PreToolUse": [
       {
-        "matcher": "read_file|view_file|read_resource|run_command|call_mcp_tool|mcp_markitdown_.*|mcp_filesystem_.*|mcp_playwright_browser_navigate|mcp_chrome.*navigate.*|Read|View|NotebookRead|Bash",
+        "matcher": "read_file|view_file|read_resource|write_file|write_to_file|edit_file|replace_file_content|multi_replace_file_content|generate_image|run_command|call_mcp_tool|mcp_.*|Read|View|NotebookRead|Write|Edit|MultiEdit|NotebookEdit|Bash",
         "hooks": [
           {
             "type": "command",
@@ -90,7 +150,7 @@ if [[ "$TARGET" == "all" || "$TARGET" == "antigravity" ]]; then
   }
 }
 EOF
-        echo "[+] Installed Antigravity Global Plugin (Hook + Rule): ${AGY_PLUGIN_DIR}"
+        echo "[+] Installed Antigravity Global Plugin (SessionStart + PreToolUse + Rule): ${AGY_PLUGIN_DIR}"
     fi
 fi
 
@@ -110,16 +170,28 @@ path = sys.argv[1]
 try:
     with open(path, "r", encoding="utf-8") as f:
         cfg = json.load(f)
-    pre = cfg.get("hooks", {}).get("PreToolUse")
-    if isinstance(pre, list):
-        cfg["hooks"]["PreToolUse"] = [
-            e for e in pre
-            if not any("agent-blindfold" in str(h.get("command", "")) for h in (e.get("hooks") or []))
-        ]
+    hooks = cfg.get("hooks", {})
+    if isinstance(hooks, dict):
+        pre = hooks.get("PreToolUse")
+        if isinstance(pre, list):
+            hooks["PreToolUse"] = [
+                e for e in pre
+                if not any("agent-blindfold" in str(h.get("command", "")) for h in (e.get("hooks") or []))
+            ]
+        ses = hooks.get("SessionStart")
+        if isinstance(ses, list):
+            filtered_ses = [
+                e for e in ses
+                if not any("agent-blindfold" in str(h.get("command", "")) for h in (e.get("hooks") or []))
+            ]
+            if filtered_ses:
+                hooks["SessionStart"] = filtered_ses
+            else:
+                hooks.pop("SessionStart", None)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2, ensure_ascii=False)
             f.write("\n")
-        print(f"[-] Cleaned agent-blindfold entry from: {path}")
+        print(f"[-] Cleaned agent-blindfold entries from: {path}")
 except Exception as exc:
     print(f"[!] Could not auto-clean {path}: {exc}")
 PYEOF
@@ -128,12 +200,14 @@ PYEOF
         if [[ -d "$CLAUDE_DIR" || "$TARGET" == "claude" ]]; then
             mkdir -p "$CLAUDE_HOOK_DIR"
             cp "${REPO_ROOT}/scripts/guard.sh" "${CLAUDE_HOOK_DIR}/guard.sh"
-            chmod +x "${CLAUDE_HOOK_DIR}/guard.sh"
+            cp "${REPO_ROOT}/scripts/session_start.sh" "${CLAUDE_HOOK_DIR}/session_start.sh"
+            cp "${REPO_ROOT}/scripts/unlock.sh" "${CLAUDE_HOOK_DIR}/unlock.sh"
+            chmod +x "${CLAUDE_HOOK_DIR}/guard.sh" "${CLAUDE_HOOK_DIR}/session_start.sh" "${CLAUDE_HOOK_DIR}/unlock.sh"
 
             if [[ -n "$PYTHON_BIN" ]]; then
-                "$PYTHON_BIN" - "$CLAUDE_SETTINGS" "${CLAUDE_HOOK_DIR}/guard.sh" << 'PYEOF'
+                "$PYTHON_BIN" - "$CLAUDE_SETTINGS" "${CLAUDE_HOOK_DIR}/guard.sh" "${CLAUDE_HOOK_DIR}/session_start.sh" << 'PYEOF'
 import json, os, shutil, sys
-settings_path, guard_sh = sys.argv[1], sys.argv[2]
+settings_path, guard_sh, session_sh = sys.argv[1], sys.argv[2], sys.argv[3]
 cfg = {}
 if os.path.isfile(settings_path):
     shutil.copy2(settings_path, settings_path + ".bak")
@@ -149,18 +223,28 @@ pre = [
     if not any("agent-blindfold" in str(h.get("command", "")) for h in (e.get("hooks") or []))
 ]
 pre.append({
-    "matcher": "Read|View|NotebookRead|Bash|mcp__.*",
+    "matcher": "Read|View|NotebookRead|Write|Edit|MultiEdit|NotebookEdit|Bash|mcp__.*",
     "hooks": [{"type": "command", "command": f'"{guard_sh}"'}],
 })
 hooks["PreToolUse"] = pre
 
+ses = hooks.setdefault("SessionStart", [])
+ses = [
+    e for e in ses
+    if not any("agent-blindfold" in str(h.get("command", "")) for h in (e.get("hooks") or []))
+]
+ses.append({
+    "hooks": [{"type": "command", "command": f'"{session_sh}"'}],
+})
+hooks["SessionStart"] = ses
+
 with open(settings_path, "w", encoding="utf-8") as f:
     json.dump(cfg, f, indent=2, ensure_ascii=False)
     f.write("\n")
-print(f"[+] Merged PreToolUse hook into Claude Code settings: {settings_path}")
+print(f"[+] Merged SessionStart & PreToolUse hooks into Claude Code settings: {settings_path}")
 PYEOF
             else
-                echo "[+] Copied Claude Code hook to ${CLAUDE_HOOK_DIR}/guard.sh (install python3 to auto-merge settings.json)."
+                echo "[+] Copied Claude Code hooks to ${CLAUDE_HOOK_DIR} (install python3 to auto-merge settings.json)."
             fi
         else
             echo "[i] ~/.claude not detected; skipped Claude Code setup (pass '--target claude' to force)."
@@ -170,7 +254,11 @@ fi
 
 echo ""
 if [[ "$UNINSTALL" -eq 1 ]]; then
+    if [[ ! -d "$AGY_PLUGIN_DIR" && ! -d "$CLAUDE_HOOK_DIR" && -f "$POLICY_FILE" ]]; then
+        rm -f "$POLICY_FILE"
+        echo "[-] Removed global policy config: ${POLICY_FILE}"
+    fi
     echo "[OK] agent-blindfold has been cleanly uninstalled."
 else
-    echo "[OK] agent-blindfold is active! Your private stash is physically shielded."
+    echo "[OK] agent-blindfold v1.1 is active! Private vaults locked; engineering workspaces auto-exempted (${AUTO_GRANT})."
 fi
