@@ -1,0 +1,6 @@
+# Media Privacy & Anti-Ban Isolation Rule (agent-blindfold / Heart-Under-Blade)
+
+- **Default Media Isolation**: When scanning directories, searching files, or reading content, strictly skip all local image, video, and audio files (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.bmp`, `.ico`, `.heic`, `.heif`, `.avif`, `.mp4`, `.mkv`, `.avi`, `.mov`, `.webm`, `.flv`, `.wmv`, `.mp3`, `.wav`, `.flac`, `.m4a`, `.ogg`, `.aac`).
+- **Personal & External Directories Forbidden**: Never read, inspect, copy, or run scripts on media files located in personal system folders (`Pictures`, `Videos`, `Music`, `Desktop`, `Downloads`, `Documents`, `AppData`) or outside the active project workspace.
+- **Workspace Media Unlock Condition**: Inside an active project workspace, `.svg` vector icon files may be read as plain text, while binary media files remain blocked by default unless `.allow_media` exists at the workspace root and the user explicitly requests inspecting that project asset.
+- **No Hook Bypass**: If a tool call is blocked by `agent-blindfold`, respect the denial immediately. Never attempt to bypass it via shell encoding (`base64`, `certutil`, `xxd`), Python imaging libraries (`PIL`, `cv2`), `ffmpeg`, or copying private files into the workspace.

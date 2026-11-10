@@ -2,7 +2,7 @@
   "agent-blindfold": {
     "PreToolUse": [
       {
-        "matcher": "read_file|view_file|read_resource|Read|View|mcp_.*",
+        "matcher": "read_file|view_file|read_resource|run_command|call_mcp_tool|mcp_markitdown_.*|mcp_filesystem_.*|mcp_playwright_browser_navigate|mcp_chrome.*navigate.*|Read|View|NotebookRead|Bash",
         "hooks": [
           {
             "type": "command",

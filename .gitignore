@@ -1,4 +1,15 @@
+# Temporary media unlock marker (never commit)
 .allow_media
+
+# Automated test sandbox
+.tmp_test_sandbox/
+
+# Backup & runtime artifacts
+*.bak
+*.log
+__pycache__/
+*.py[cod]
+
+# OS metadata
 .DS_Store
 Thumbs.db
-*.log
