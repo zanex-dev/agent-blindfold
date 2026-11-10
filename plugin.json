@@ -1,0 +1,15 @@
+{
+  "name": "agent-blindfold",
+  "version": "1.0.0",
+  "description": "Zero-trust local media privacy & anti-ban physical firewall (PreToolUse Hook) for AI Coding Agents (Google Antigravity & Claude Code). Codename: Heart-Under-Blade (刃下心).",
+  "author": {
+    "name": "琢玹 (zanex)",
+    "url": "https://github.com/zanex"
+  },
+  "homepage": "https://github.com/zanex/agent-blindfold",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zanex/agent-blindfold.git"
+  },
+  "license": "MIT"
+}

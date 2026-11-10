@@ -1,0 +1,16 @@
+{
+  "agent-blindfold": {
+    "PreToolUse": [
+      {
+        "matcher": "read_file|view_file|read_resource|Read|View|mcp_.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./scripts/guard.ps1",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
