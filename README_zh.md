@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./assets/shinobu-banner.png" alt="agent-blindfold | Heart-Under-Blade (刃下心)" width="100%" />
+<img src="./assets/shinobu-banner.svg" alt="agent-blindfold | Heart-Under-Blade (刃下心)" width="100%" />
 
 # 🕶️ agent-blindfold
 
@@ -188,7 +188,7 @@ agent-blindfold/
 ├── .github/workflows/
 │   └── ci.yml             # GitHub Actions 三大操作系统矩阵 CI (Windows / Ubuntu / macOS)
 ├── assets/
-│   └── .gitkeep           # 预留顶部横幅配图位 (./assets/shinobu-banner.png)
+│   └── shinobu-banner.svg # 顶部矢量横幅配图 (Heart-Under-Blade / 刃下心)
 ├── rules/
 │   └── AGENTS.md          # 第一层提示词媒体隔离软规则 (随 Antigravity 插件自动生效)
 ├── scripts/

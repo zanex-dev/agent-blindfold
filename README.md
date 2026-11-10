@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./assets/shinobu-banner.png" alt="agent-blindfold | Heart-Under-Blade (刃下心)" width="100%" />
+<img src="./assets/shinobu-banner.svg" alt="agent-blindfold | Heart-Under-Blade (刃下心)" width="100%" />
 
 # 🕶️ agent-blindfold
 
@@ -188,7 +188,7 @@ agent-blindfold/
 ├── .github/workflows/
 │   └── ci.yml             # Multi-OS GitHub Actions CI (Windows, Ubuntu, macOS)
 ├── assets/
-│   └── .gitkeep           # Reserved for ./assets/shinobu-banner.png
+│   └── shinobu-banner.svg # Project vector banner (Heart-Under-Blade)
 ├── rules/
 │   └── AGENTS.md          # Layer 1 soft prompt media-isolation rule (Antigravity Plugin)
 ├── scripts/
