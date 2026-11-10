@@ -14,7 +14,7 @@
 [![Claude Code](https://img.shields.io/badge/Claude_Code-SessionStart_%2B_PreToolUse-D97757.svg)](#快速开始与一键安装)
 [![Platform](https://img.shields.io/badge/Platform-Windows_%7C_macOS_%7C_Linux-success.svg)](#智能四级防御与自动豁免架构)
 
-[English](./README.md) | **简体中文**
+[English](./README.md) | **简体中文** · [中文更新日志](./CHANGELOG_zh.md)
 
 </div>
 
@@ -199,7 +199,8 @@ agent-blindfold/
 ├── install.ps1                # Windows 幂等一键安装与无损卸载脚本
 ├── install.sh                 # macOS / Linux 幂等一键安装与无损卸载脚本
 ├── SECURITY.md                # 威胁模型边界说明与漏洞披露指南
-├── CHANGELOG.md               # 版本演进日志
+├── CHANGELOG_zh.md            # 简体中文版本演进日志
+├── CHANGELOG.md               # 英文版本演进日志
 ├── README.md                  # 英文主文档
 ├── README_zh.md               # 简体中文说明文档
 └── LICENSE                    # MIT 开源协议

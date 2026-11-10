@@ -14,7 +14,7 @@
 [![Claude Code](https://img.shields.io/badge/Claude_Code-SessionStart_%2B_PreToolUse-D97757.svg)](#quick-start--one-click-install)
 [![Platform](https://img.shields.io/badge/Platform-Windows_%7C_macOS_%7C_Linux-success.svg)](#architecture--smart-4-tier-defense)
 
-**English** | [简体中文](./README_zh.md)
+**English** | [简体中文](./README_zh.md) · [Changelog](./CHANGELOG.md)
 
 </div>
 
