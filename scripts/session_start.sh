@@ -277,9 +277,10 @@ def main() -> None:
     if granted:
         notice = (
             f"[agent-blindfold] Engineering media exemption automatically granted at session start "
-            f"(mode: {summary_mode}). Reading project media assets, .svg icons, and Playwright/sandbox "
-            f"screenshots inside the active workspace is permitted; personal directories and modifying "
-            f".allow_media remain strictly blocked."
+            f"(mode: {summary_mode}). Reading, generating, and editing/processing media assets "
+            f"(including via PIL/cv2/ffmpeg/scripts), .svg files, current-session brain/<id> files, "
+            f"and Playwright/sandbox screenshots inside exempted scopes are permitted; personal "
+            f"directories, cross-session uploads, and modifying .allow_media remain strictly blocked."
         )
         emit_session(is_claude, notice)
 

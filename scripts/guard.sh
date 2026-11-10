@@ -27,6 +27,7 @@ if [ -z "$PYTHON_BIN" ]; then
 fi
 
 exec "$PYTHON_BIN" -c '
+import glob
 import json
 import os
 import re
@@ -360,6 +361,38 @@ def evaluate_allow_media_pass(marker_path: str) -> str:
     return "missing"
 
 
+def is_tier0_dir_anchor(
+    norm_dir: str,
+    valid_ws: list[str],
+    art_dir_norm: str,
+    conv_id: str,
+) -> bool:
+    if not norm_dir or in_hard_vault(norm_dir) or in_other_brain_session(norm_dir, art_dir_norm, conv_id):
+        return False
+    matched_ws = [ws for ws in valid_ws if is_subpath(norm_dir, ws)]
+    probe = os.path.join(norm_dir, "__tier0_probe__.png")
+    return is_auto_exempt_engineering_sandbox(probe, matched_ws, art_dir_norm, conv_id)
+
+
+def is_unlocked_ws_dir(norm_dir: str, valid_ws: list[str]) -> bool:
+    if not norm_dir or in_hard_vault(norm_dir):
+        return False
+    for ws in valid_ws:
+        if is_subpath(norm_dir, ws):
+            if evaluate_allow_media_pass(os.path.join(ws, ".allow_media")) == "valid":
+                return True
+    return False
+
+
+def is_relative_non_traversal_token(raw_tok: str) -> bool:
+    if not raw_tok or not raw_tok.strip():
+        return False
+    t = raw_tok.strip().strip("\"").strip("\x27")
+    if re.match(r"^(?:[A-Za-z]:|[\\/]|~|\$HOME|\$env:USERPROFILE|%USERPROFILE%|file://)", t, re.I):
+        return False
+    return ".." not in re.split(r"[\\/]+", t)
+
+
 def evaluate_media_path(
     raw_target: str,
     base_dir: str,
@@ -482,24 +515,89 @@ def main() -> None:
         if re.search(vault_scan_re, cmd_line):
             emit("deny", REASON_PERSONAL, is_claude)
 
+        safe_cd_dirs = []
+        unsafe_cd_dirs = []
+        cd_re = r"(?i)(?:^|[;|&(\r\n])\s*(?:cd(?:\s+/d)?|chdir|pushd|Set-Location|Push-Location|sl)\s+(?:-(?:Path|LiteralPath)\s+)?(?:\"([^\"\r\n]+)\"|\x27([^\x27\r\n]+)\x27|([^\s\"\x27`;|&<>()\r\n]+))"
+        run_base = base_dir
+        for cm in re.finditer(cd_re, cmd_line):
+            cd_raw = cm.group(1) or cm.group(2) or cm.group(3) or ""
+            if not cd_raw.strip() or cd_raw.strip() == "-":
+                continue
+            cd_norm = normalize_local_path(cd_raw, run_base).rstrip("\\/")
+            if not cd_norm:
+                continue
+            run_base = cd_norm
+            if is_tier0_dir_anchor(cd_norm, valid_ws, art_dir_norm, conv_id) or is_unlocked_ws_dir(cd_norm, valid_ws):
+                if cd_norm not in safe_cd_dirs:
+                    safe_cd_dirs.append(cd_norm)
+            else:
+                if cd_norm not in unsafe_cd_dirs:
+                    unsafe_cd_dirs.append(cd_norm)
+
+        tier0_anchor_dirs = []
+        anchor_literals = []
+        rooted_prefix_re = r"^(?:[A-Za-z]:[\\/]|~[\\/]|/|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file://)"
+        for qm in re.finditer(r"\"([^\"\r\n]+)\"|\x27([^\x27\r\n]+)\x27", cmd_line):
+            qv = (qm.group(1) or qm.group(2) or "").strip()
+            if re.match(rooted_prefix_re, qv, re.I):
+                anchor_literals.append(qv)
+        for um in re.finditer(r"(?i)(?<![A-Za-z0-9_])((?:[A-Za-z]:[\\/]|~[\\/]|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file://)[^\s\"\x27`;|&<>(),=]+)", cmd_line):
+            anchor_literals.append(um.group(1).strip())
+        for al in anchor_literals:
+            al_norm = normalize_local_path(al, base_dir).rstrip("\\/")
+            if not al_norm:
+                continue
+            cands = [al_norm]
+            parent_al = os.path.dirname(al_norm).rstrip("\\/")
+            if parent_al:
+                cands.append(parent_al)
+            for cd_cand in cands:
+                if is_tier0_dir_anchor(cd_cand, valid_ws, art_dir_norm, conv_id):
+                    if cd_cand not in tier0_anchor_dirs:
+                        tier0_anchor_dirs.append(cd_cand)
+                    break
+
         ext_grp = "jpg|jpeg|png|gif|webp|bmp|ico|heic|heif|avif|mp4|mkv|avi|mov|webm|flv|wmv|mp3|wav|flac|m4a|ogg|aac|svg"
         tokens = []
         tokens.extend(re.findall(rf"(?i)\"([^\"\r\n]+\.(?:{ext_grp}))\"", cmd_line))
         tokens.extend(re.findall(rf"(?i)\x27([^\x27\r\n]+\.(?:{ext_grp}))\x27", cmd_line))
-        tokens.extend(re.findall(rf"(?i)(?<![A-Za-z0-9_.:/-])([^\s\"\x27`|;&<>()]+\.(?:{ext_grp}))(?![A-Za-z0-9_])", cmd_line))
+        tokens.extend(re.findall(rf"(?i)(?<![A-Za-z0-9_.:/-])([^\s\"\x27`|;&<>(),=]+\.(?:{ext_grp}))(?![A-Za-z0-9_])", cmd_line))
 
         is_safe_git = (not has_chain) and bool(re.match(r"^\s*git\s+(?:commit|status|log|branch|tag|push|pull|fetch)\b", cmd_line))
         is_dumper = (not is_safe_git_repo) and bool(re.search(
             r"(?i)\b(?:base64|certutil|xxd|hexdump|od|Format-Hex|AsByteStream|ReadAllBytes|ToBase64String|PIL|Pillow|Image\.open|cv2|imread|imageio|pytesseract|tesseract|easyocr|ffmpeg|ffprobe|magick|identify|exiftool|sips|markitdown|cp|mv|scp|rsync|Copy-Item|Move-Item|xcopy|robocopy|copy|move)\b|-Encoding\s+Byte",
             cmd_line,
         ))
+        effective_base = safe_cd_dirs[-1] if (safe_cd_dirs and not unsafe_cd_dirs) else base_dir
 
         for tok in tokens:
             if is_web_uri(tok):
                 continue
             if is_safe_git and not re.search(r"[\\/]", tok):
                 continue
-            verdict = evaluate_media_path(tok, base_dir, valid_ws, art_dir_norm, conv_id)
+
+            is_rel_non_trav = is_relative_non_traversal_token(tok)
+            if is_rel_non_trav and unsafe_cd_dirs:
+                for u_dir in unsafe_cd_dirs:
+                    u_verdict = evaluate_media_path(tok, u_dir, valid_ws, art_dir_norm, conv_id)
+                    if u_verdict == REASON_PERSONAL:
+                        emit("deny", REASON_PERSONAL, is_claude)
+                    elif u_verdict in (REASON_WS, REASON_EXPIRED) and is_dumper:
+                        emit("deny", u_verdict, is_claude)
+
+            verdict = evaluate_media_path(tok, effective_base, valid_ws, art_dir_norm, conv_id)
+            if verdict is not None and is_rel_non_trav and not unsafe_cd_dirs and tier0_anchor_dirs:
+                is_template = bool(re.search(r"\{[^}]+\}|%[0-9]*[sdxX]", tok))
+                exists_in_locked = False
+                if effective_base:
+                    cand_locked = os.path.join(effective_base, tok)
+                    if "*" in tok or "?" in tok:
+                        exists_in_locked = bool(glob.glob(cand_locked))
+                    else:
+                        exists_in_locked = os.path.exists(cand_locked)
+                if (not effective_base or is_template) and not exists_in_locked:
+                    verdict = evaluate_media_path(tok, tier0_anchor_dirs[0], valid_ws, art_dir_norm, conv_id)
+
             if verdict == REASON_PERSONAL:
                 emit("deny", REASON_PERSONAL, is_claude)
             elif verdict in (REASON_WS, REASON_EXPIRED) and is_dumper:

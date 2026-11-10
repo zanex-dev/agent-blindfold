@@ -6,6 +6,16 @@ All notable changes to **`agent-blindfold`** will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-11-11 — Tier 0 & Workspace Media Editing Fix
+
+### Fixed & Hardened
+- **Shell Media Editing & Slicing inside Tier 0 Sandboxes (`scripts/guard.ps1` & `scripts/guard.sh`)**:
+  - Fixed false-positive blocks when inline scripts (`PIL`/`Pillow`, `cv2`, `ffmpeg`, `magick`) operate on Tier 0 sandboxes (`brain/<conversationId>` including current-session `.user_uploaded/` & `scratch/`, or `scratch/<subproject>`) using relative/template output filenames (e.g. `slice_{idx}.png`) without an active workspace (`workspacePaths = []`) or inside read-only chat workspaces.
+  - Added shell directory-change tracking (`cd`, `chdir`, `pushd`, `Set-Location`, `Push-Location`, `sl`): permits relative media operations after changing into Tier 0 sandboxes or unlocked workspaces while blocking rogue `cd ~/Downloads && base64 ...` escapes from unlocked workspaces.
+  - Excluded `=` and `,` from unquoted shell path token extraction so CLI flag syntax (`--output=<path>`, `file=<path>`) resolves cleanly.
+- **Explicit Media Editing Guidance (`rules/AGENTS.md`, `session_start.ps1`, `session_start.sh`)**:
+  - Clarified that Tier 0 sandboxes and `.allow_media`-unlocked workspaces permit full media creation, cropping, slicing, and script-based editing—reserving bypass prohibitions strictly for blocked private, external, or cross-session paths.
+
 ## [1.1.0] - 2026-11-11 — Smart Engineering Auto-Exemption & Timed/Permanent Passes
 
 ### Added

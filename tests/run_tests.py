@@ -560,6 +560,93 @@ def run_engine_suite(engine_name, cmd_list):
         }, env_extra=home_env)
         assert res_safe_git_unlock == {"decision": "allow"}, f"Case 20h failed: {res_safe_git_unlock}"
         print("  [PASS] 20. Anti-Tamper Guard (blocks .allow_media/policy forgery, unlock CLI invocation & git chaining) verified")
+
+        # 26. [v1.1.1 Tier 0 & Workspace Media Editing] Inline PIL slicing, cd into Tier 0 scratch, --output= flag & rogue cd defense
+        fake_brain_cur_scr = os.path.join(fake_brain_cur, "scratch")
+        os.makedirs(fake_brain_cur_scr, exist_ok=True)
+        pil_slice_cmd = (
+            "python -c \"from PIL import Image; import os; "
+            f"src = r'{os.path.join(fake_brain_cur_up, 'long_shot.jpg')}'; "
+            f"out_dir = r'{fake_brain_cur_scr}'; "
+            "im = Image.open(src); idx = 0; "
+            "im.crop((0,0,100,100)).save(os.path.join(out_dir, f'slice_{idx}.png'))\""
+        )
+        # 26a. PIL slicing current-session uploaded screenshot into brain/<id>/scratch with NO workspace -> Allowed!
+        _, res_slice_nowk = invoke_json_hook(cmd_list, {
+            "conversationId": "conv-active-111",
+            "artifactDirectoryPath": fake_brain_cur,
+            "toolCall": {"name": "run_command", "args": {"CommandLine": pil_slice_cmd}},
+            "workspacePaths": [],
+        }, env_extra=home_env)
+        assert res_slice_nowk == {"decision": "allow"}, f"Case 26a (Tier 0 PIL slice without workspace) failed: {res_slice_nowk}"
+
+        # 26b. Same PIL slicing even when an un-unlocked workspace (e.g. chat/locked ws) is open -> Allowed!
+        _, res_slice_lockedwk = invoke_json_hook(cmd_list, {
+            "conversationId": "conv-active-111",
+            "artifactDirectoryPath": fake_brain_cur,
+            "toolCall": {"name": "run_command", "args": {"CommandLine": pil_slice_cmd}},
+            "workspacePaths": [subproject_ws],
+        }, env_extra=home_env)
+        assert res_slice_lockedwk == {"decision": "allow"}, f"Case 26b (Tier 0 PIL slice with locked workspace) failed: {res_slice_lockedwk}"
+
+        # 26c. cd into Tier 0 scratch/<subproject> + relative media editing -> Allowed!
+        _, res_cd_scr = invoke_json_hook(cmd_list, {
+            "toolCall": {
+                "name": "run_command",
+                "args": {"CommandLine": f"cd \"{fake_scratch_app}\" && python -c \"from PIL import Image; Image.open('sprite.png').save('cropped.webp')\""},
+            },
+            "workspacePaths": [],
+        }, env_extra=home_env)
+        assert res_cd_scr == {"decision": "allow"}, f"Case 26c (cd into scratch/<app> + PIL edit) failed: {res_cd_scr}"
+
+        # 26d. CLI --output=<tier0_path> flag syntax -> Allowed!
+        _, res_flag_eq = invoke_json_hook(cmd_list, {
+            "conversationId": "conv-active-111",
+            "artifactDirectoryPath": fake_brain_cur,
+            "toolCall": {
+                "name": "run_command",
+                "args": {"CommandLine": f"magick convert \"{os.path.join(fake_brain_cur_up, 'a.jpg')}\" --output={os.path.join(fake_brain_cur_scr, 'b.png')}"},
+            },
+            "workspacePaths": [],
+        }, env_extra=home_env)
+        assert res_flag_eq == {"decision": "allow"}, f"Case 26d (--output= flag syntax) failed: {res_flag_eq}"
+
+        # 26e. Unlocked workspace (.allow_media valid): PIL / ffmpeg editing relative media -> Allowed; rogue 'cd ~/Downloads && base64' -> STILL Denied!
+        with open(allow_marker, "w", encoding="utf-8") as f:
+            f.write("permanent")
+        _, res_ws_edit = invoke_json_hook(cmd_list, {
+            "toolCall": {
+                "name": "run_command",
+                "args": {"CommandLine": "python -c \"from PIL import Image; Image.open('assets/hero.png').crop((0,0,50,50)).save('assets/hero_crop.png')\""},
+            },
+            "workspacePaths": [subproject_ws],
+        }, env_extra=home_env)
+        assert res_ws_edit == {"decision": "allow"}, f"Case 26e (unlocked workspace PIL edit) failed: {res_ws_edit}"
+
+        _, res_rogue_cd = invoke_json_hook(cmd_list, {
+            "toolCall": {
+                "name": "run_command",
+                "args": {"CommandLine": f"cd \"{fake_downloads}\" && base64 private_photo.jpg"},
+            },
+            "workspacePaths": [subproject_ws],
+        }, env_extra=home_env)
+        assert res_rogue_cd["decision"] == "deny", f"Case 26f (rogue cd into Downloads from unlocked workspace) failed: {res_rogue_cd}"
+        os.remove(allow_marker)
+
+        # 26g. Cross-session PIL slicing from another conversation's .user_uploaded -> STILL Hard Denied!
+        pil_cross_cmd = (
+            "python -c \"from PIL import Image; "
+            f"im = Image.open(r'{os.path.join(fake_brain_other_up, 'other.jpg')}'); "
+            f"im.save(r'{os.path.join(fake_brain_cur_scr, 'slice_0.png')}')\""
+        )
+        _, res_cross_slice = invoke_json_hook(cmd_list, {
+            "conversationId": "conv-active-111",
+            "artifactDirectoryPath": fake_brain_cur,
+            "toolCall": {"name": "run_command", "args": {"CommandLine": pil_cross_cmd}},
+            "workspacePaths": [],
+        }, env_extra=home_env)
+        assert res_cross_slice["decision"] == "deny", f"Case 26g (cross-session PIL slice leak) failed: {res_cross_slice}"
+        print("  [PASS] 26. Tier 0 & unlocked workspace media editing (PIL slice, scratch cd, --output= flag & rogue-cd defense) verified")
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
 

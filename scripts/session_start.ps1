@@ -325,7 +325,7 @@ foreach ($ws in $rawWorkspaces) {
 }
 
 if ($grantedWorkspaces.Count -gt 0) {
-    $notice = "[agent-blindfold] Engineering media exemption automatically granted at session start (mode: $effectiveSummaryMode). Reading project media assets, .svg icons, and Playwright/sandbox screenshots inside the active workspace is permitted; personal directories and modifying .allow_media remain strictly blocked."
+    $notice = "[agent-blindfold] Engineering media exemption automatically granted at session start (mode: $effectiveSummaryMode). Reading, generating, and editing/processing media assets (including via PIL/cv2/ffmpeg/scripts), .svg files, current-session brain/<id> files, and Playwright/sandbox screenshots inside exempted scopes are permitted; personal directories, cross-session uploads, and modifying .allow_media remain strictly blocked."
     Emit-SessionOutput -IsClaudeCode $isClaude -SystemNotice $notice
 }
 

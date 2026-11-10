@@ -516,6 +516,57 @@ function Evaluate-AllowMediaPass {
     return 'missing'
 }
 
+function Test-IsTier0DirectoryAnchor {
+    param(
+        [string]$NormDir,
+        [System.Collections.Generic.List[string]]$ValidWorkspaces,
+        [string]$ArtifactDirNorm,
+        [string]$ConversationId
+    )
+    if ([string]::IsNullOrWhiteSpace($NormDir)) { return $false }
+    if (Test-InHardVault $NormDir) { return $false }
+    if (Test-InOtherBrainSession -NormTarget $NormDir -ArtifactDirNorm $ArtifactDirNorm -ConversationId $ConversationId) { return $false }
+
+    $matchedWs = New-Object System.Collections.Generic.List[string]
+    foreach ($ws in $ValidWorkspaces) {
+        if (Test-IsSubPath -TargetNorm $NormDir -WorkspaceNorm $ws) {
+            $matchedWs.Add($ws)
+        }
+    }
+    $probeFile = Join-Path $NormDir '__tier0_probe__.png'
+    return (Test-IsAutoExemptEngineeringSandbox -NormTarget $probeFile -MatchedWorkspaces $matchedWs -ArtifactDirNorm $ArtifactDirNorm -ConversationId $ConversationId)
+}
+
+function Test-IsUnlockedWorkspaceDir {
+    param(
+        [string]$NormDir,
+        [System.Collections.Generic.List[string]]$ValidWorkspaces
+    )
+    if ([string]::IsNullOrWhiteSpace($NormDir)) { return $false }
+    if (Test-InHardVault $NormDir) { return $false }
+    foreach ($ws in $ValidWorkspaces) {
+        if (Test-IsSubPath -TargetNorm $NormDir -WorkspaceNorm $ws) {
+            if ((Evaluate-AllowMediaPass -MarkerPath (Join-Path $ws '.allow_media')) -eq 'valid') {
+                return $true
+            }
+        }
+    }
+    return $false
+}
+
+function Test-IsRelativeNonTraversalToken {
+    param([string]$RawTok)
+    if ([string]::IsNullOrWhiteSpace($RawTok)) { return $false }
+    $t = $RawTok.Trim().Trim('"').Trim("'")
+    if ($t -match '^(?i)(?:[A-Za-z]:|[\\/]|~|\$HOME|\$env:USERPROFILE|%USERPROFILE%|file://)') {
+        return $false
+    }
+    foreach ($seg in ($t -split '[\\/]+')) {
+        if ($seg -eq '..') { return $false }
+    }
+    return $true
+}
+
 function Evaluate-MediaPath {
     param(
         [string]$RawTarget,
@@ -687,7 +738,50 @@ if (-not [string]::IsNullOrWhiteSpace($cmdLine)) {
         Emit-Response -Decision 'deny' -Reason $ReasonPersonalOrExternal -IsClaudeCode $isClaude
     }
 
-    # A2: Extract media file path tokens (double-quoted, single-quoted, or unquoted)
+    # A2: Track directory changes (cd / Set-Location / Push-Location) and Tier 0 sandbox anchors in shell scripts
+    $safeCdDirs   = New-Object System.Collections.Generic.List[string]
+    $unsafeCdDirs = New-Object System.Collections.Generic.List[string]
+    $cdPattern = '(?i)(?:^|[;|&(\r\n])\s*(?:cd(?:\s+/d)?|chdir|pushd|Set-Location|Push-Location|sl)\s+(?:-(?:Path|LiteralPath)\s+)?(?:"([^"\r\n]+)"|''([^''\r\n]+)''|([^\s"''`;|&<>()\r\n]+))'
+    $runBase = $baseDir
+    foreach ($cm in [regex]::Matches($cmdLine, $cdPattern)) {
+        $cdRaw = if ($cm.Groups[1].Success) { $cm.Groups[1].Value } elseif ($cm.Groups[2].Success) { $cm.Groups[2].Value } else { $cm.Groups[3].Value }
+        if ([string]::IsNullOrWhiteSpace($cdRaw) -or $cdRaw -eq '-') { continue }
+        $cdNorm = (Normalize-LocalPath -RawPath $cdRaw -BaseDir $runBase).TrimEnd('\', '/')
+        if ([string]::IsNullOrWhiteSpace($cdNorm)) { continue }
+        $runBase = $cdNorm
+        if ((Test-IsTier0DirectoryAnchor -NormDir $cdNorm -ValidWorkspaces $validWorkspaces -ArtifactDirNorm $artifactDirNorm -ConversationId $conversationId) -or
+            (Test-IsUnlockedWorkspaceDir -NormDir $cdNorm -ValidWorkspaces $validWorkspaces)) {
+            if (-not ($safeCdDirs -contains $cdNorm)) { $safeCdDirs.Add($cdNorm) }
+        } else {
+            if (-not ($unsafeCdDirs -contains $cdNorm)) { $unsafeCdDirs.Add($cdNorm) }
+        }
+    }
+
+    $tier0AnchorDirs = New-Object System.Collections.Generic.List[string]
+    $anchorLiterals  = New-Object System.Collections.Generic.List[string]
+    $rootedPrefixRe  = '^(?i)(?:[A-Za-z]:[\\/]|~[\\/]|\/|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file://)'
+    foreach ($qm in [regex]::Matches($cmdLine, '"([^"\r\n]+)"|''([^''\r\n]+)''')) {
+        $qv = if ($qm.Groups[1].Success) { $qm.Groups[1].Value.Trim() } else { $qm.Groups[2].Value.Trim() }
+        if ($qv -match $rootedPrefixRe) { $anchorLiterals.Add($qv) }
+    }
+    foreach ($um in [regex]::Matches($cmdLine, '(?i)(?<![A-Za-z0-9_])((?:[A-Za-z]:[\\/]|~[\\/]|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file://)[^\s"''`;|&<>(),=]+)')) {
+        $anchorLiterals.Add($um.Groups[1].Value.Trim())
+    }
+    foreach ($al in $anchorLiterals) {
+        $alNorm = (Normalize-LocalPath -RawPath $al -BaseDir $baseDir).TrimEnd('\', '/')
+        if ([string]::IsNullOrWhiteSpace($alNorm)) { continue }
+        $candDirs = @($alNorm)
+        $parentAl = Split-Path -Parent $alNorm
+        if (-not [string]::IsNullOrWhiteSpace($parentAl)) { $candDirs += $parentAl }
+        foreach ($cdCand in $candDirs) {
+            if (Test-IsTier0DirectoryAnchor -NormDir $cdCand -ValidWorkspaces $validWorkspaces -ArtifactDirNorm $artifactDirNorm -ConversationId $conversationId) {
+                if (-not ($tier0AnchorDirs -contains $cdCand)) { $tier0AnchorDirs.Add($cdCand) }
+                break
+            }
+        }
+    }
+
+    # A3: Extract media file path tokens (double-quoted, single-quoted, or unquoted)
     $extGroup = 'jpg|jpeg|png|gif|webp|bmp|ico|heic|heif|avif|mp4|mkv|avi|mov|webm|flv|wmv|mp3|wav|flac|m4a|ogg|aac|svg'
     $shellTokens = New-Object System.Collections.Generic.List[string]
 
@@ -697,18 +791,53 @@ if (-not [string]::IsNullOrWhiteSpace($cmdLine)) {
     foreach ($m in [regex]::Matches($cmdLine, "(?i)'([^'\r\n]+\.(?:$extGroup))'")) {
         $shellTokens.Add($m.Groups[1].Value)
     }
-    foreach ($m in [regex]::Matches($cmdLine, "(?i)(?<![A-Za-z0-9_.:/-])([^\s`"''`|;&<>()]+\.(?:$extGroup))(?![A-Za-z0-9_])")) {
+    foreach ($m in [regex]::Matches($cmdLine, "(?i)(?<![A-Za-z0-9_.:/-])([^\s`"''`|;&<>(),=]+\.(?:$extGroup))(?![A-Za-z0-9_])")) {
         $shellTokens.Add($m.Groups[1].Value)
     }
 
     $isSafeGitMeta = (-not $hasChainOp) -and ($cmdLine -match '^\s*git\s+(?:commit|status|log|branch|tag|push|pull|fetch)\b')
     $isByteDumper  = (-not $isSafeGitRepoOp) -and ($cmdLine -match '(?i)\b(?:base64|certutil|xxd|hexdump|od|Format-Hex|AsByteStream|ReadAllBytes|ToBase64String|PIL|Pillow|Image\.open|cv2|imread|imageio|pytesseract|tesseract|easyocr|ffmpeg|ffprobe|magick|identify|exiftool|sips|markitdown|cp|mv|scp|rsync|Copy-Item|Move-Item|xcopy|robocopy|copy|move)\b|-Encoding\s+Byte')
+    $effectiveBaseDir = if ($safeCdDirs.Count -gt 0 -and $unsafeCdDirs.Count -eq 0) { $safeCdDirs[$safeCdDirs.Count - 1] } else { $baseDir }
 
     foreach ($tok in $shellTokens) {
         if (Test-IsWebOrNonLocalUri $tok) { continue }
         if ($isSafeGitMeta -and ($tok -notmatch '[\\/]')) { continue }
 
-        $verdict = Evaluate-MediaPath -RawTarget $tok -BaseDir $baseDir -ValidWorkspaces $validWorkspaces -ArtifactDirNorm $artifactDirNorm -ConversationId $conversationId
+        $isRelNonTrav = Test-IsRelativeNonTraversalToken $tok
+
+        # Enforce unsafe cd targets first so 'cd ~/Downloads && base64 secret.jpg' is always caught even from an unlocked workspace
+        if ($isRelNonTrav -and $unsafeCdDirs.Count -gt 0) {
+            foreach ($uDir in $unsafeCdDirs) {
+                $uVerdict = Evaluate-MediaPath -RawTarget $tok -BaseDir $uDir -ValidWorkspaces $validWorkspaces -ArtifactDirNorm $artifactDirNorm -ConversationId $conversationId
+                if ($uVerdict -eq $ReasonPersonalOrExternal) {
+                    Emit-Response -Decision 'deny' -Reason $ReasonPersonalOrExternal -IsClaudeCode $isClaude
+                } elseif (($uVerdict -eq $ReasonWorkspaceDefault -or $uVerdict -eq $ReasonWorkspaceExpired) -and $isByteDumper) {
+                    Emit-Response -Decision 'deny' -Reason $uVerdict -IsClaudeCode $isClaude
+                }
+            }
+        }
+
+        $verdict = Evaluate-MediaPath -RawTarget $tok -BaseDir $effectiveBaseDir -ValidWorkspaces $validWorkspaces -ArtifactDirNorm $artifactDirNorm -ConversationId $conversationId
+
+        # Allow relative/template output tokens in inline scripts operating on Tier 0 sandboxes (e.g. PIL slicing into brain/<id>/scratch/slice_{idx}.png)
+        if ($null -ne $verdict -and $isRelNonTrav -and $unsafeCdDirs.Count -eq 0 -and $tier0AnchorDirs.Count -gt 0) {
+            $isTemplateTok = ($tok -match '\{[^}]+\}|%[0-9]*[sdxX]')
+            $existsInLockedBase = $false
+            if (-not [string]::IsNullOrWhiteSpace($effectiveBaseDir)) {
+                $candLocked = Join-Path $effectiveBaseDir $tok
+                if ($tok -match '[\*\?]') {
+                    if (Get-ChildItem -Path $candLocked -Force -ErrorAction SilentlyContinue | Select-Object -First 1) {
+                        $existsInLockedBase = $true
+                    }
+                } elseif (Test-Path -LiteralPath $candLocked) {
+                    $existsInLockedBase = $true
+                }
+            }
+            if (([string]::IsNullOrWhiteSpace($effectiveBaseDir) -or $isTemplateTok) -and (-not $existsInLockedBase)) {
+                $verdict = Evaluate-MediaPath -RawTarget $tok -BaseDir $tier0AnchorDirs[0] -ValidWorkspaces $validWorkspaces -ArtifactDirNorm $artifactDirNorm -ConversationId $conversationId
+            }
+        }
+
         if ($verdict -eq $ReasonPersonalOrExternal) {
             Emit-Response -Decision 'deny' -Reason $ReasonPersonalOrExternal -IsClaudeCode $isClaude
         } elseif (($verdict -eq $ReasonWorkspaceDefault -or $verdict -eq $ReasonWorkspaceExpired) -and $isByteDumper) {
