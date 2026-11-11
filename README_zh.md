@@ -120,6 +120,9 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall
 ./install.sh --uninstall
 ```
 
+### 4. 在 Google Antigravity 内一键热开关（免重启更新与调试）
+由于 `agent-blindfold` 采用标准原生插件架构封装，当你需要更新或调试防火墙自身时，无需执行卸载或重启客户端——直接在 **Customizations → Plugins → Agent Blindfold**（或在对话中点击 `customization://agent-blindfold` 深链）拨动启用/禁用开关，即可秒级热挂起或恢复整套钩子与规则。
+
 ---
 
 ## 🔓 限时与永久豁免自由切换（`unlock` 控制器与一键面板）

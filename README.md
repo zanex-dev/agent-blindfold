@@ -120,6 +120,9 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall
 ./install.sh --uninstall
 ```
 
+### 4. Live Toggle in Google Antigravity (Zero Restart)
+Because `agent-blindfold` ships as a native Antigravity plugin bundle, you can temporarily pause or resume all hooks & rules live—without uninstalling or restarting the app—via **Customizations → Plugins → Agent Blindfold** (or via chat link `customization://agent-blindfold`) whenever debugging or updating the firewall itself.
+
 ---
 
 ## 🔓 Timed vs. Permanent Workspace Passes (`unlock` CLI & Controller)
