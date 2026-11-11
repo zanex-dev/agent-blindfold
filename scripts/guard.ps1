@@ -373,7 +373,7 @@ function Test-IsAutoExemptEngineeringSandbox {
     #>
     param(
         [string]$NormTarget,
-        [System.Collections.Generic.List[string]]$MatchedWorkspaces,
+        [AllowEmptyCollection()][string[]]$MatchedWorkspaces = @(),
         [string]$ArtifactDirNorm,
         [string]$ConversationId
     )
@@ -519,9 +519,9 @@ function Evaluate-AllowMediaPass {
 function Test-IsTier0DirectoryAnchor {
     param(
         [string]$NormDir,
-        [System.Collections.Generic.List[string]]$ValidWorkspaces,
-        [string]$ArtifactDirNorm,
-        [string]$ConversationId
+        [AllowEmptyCollection()][string[]]$ValidWorkspaces = @(),
+        [string]$ArtifactDirNorm = "",
+        [string]$ConversationId = ""
     )
     if ([string]::IsNullOrWhiteSpace($NormDir)) { return $false }
     if (Test-InHardVault $NormDir) { return $false }
@@ -540,7 +540,7 @@ function Test-IsTier0DirectoryAnchor {
 function Test-IsUnlockedWorkspaceDir {
     param(
         [string]$NormDir,
-        [System.Collections.Generic.List[string]]$ValidWorkspaces
+        [AllowEmptyCollection()][string[]]$ValidWorkspaces = @()
     )
     if ([string]::IsNullOrWhiteSpace($NormDir)) { return $false }
     if (Test-InHardVault $NormDir) { return $false }
@@ -571,7 +571,7 @@ function Evaluate-MediaPath {
     param(
         [string]$RawTarget,
         [string]$BaseDir,
-        [System.Collections.Generic.List[string]]$ValidWorkspaces,
+        [AllowEmptyCollection()][string[]]$ValidWorkspaces = @(),
         [string]$ArtifactDirNorm = "",
         [string]$ConversationId = ""
     )
@@ -760,11 +760,15 @@ if (-not [string]::IsNullOrWhiteSpace($cmdLine)) {
     $tier0AnchorDirs = New-Object System.Collections.Generic.List[string]
     $anchorLiterals  = New-Object System.Collections.Generic.List[string]
     $rootedPrefixRe  = '^(?i)(?:[A-Za-z]:[\\/]|~[\\/]|\/|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file://)'
-    foreach ($qm in [regex]::Matches($cmdLine, '"([^"\r\n]+)"|''([^''\r\n]+)''')) {
-        $qv = if ($qm.Groups[1].Success) { $qm.Groups[1].Value.Trim() } else { $qm.Groups[2].Value.Trim() }
+    foreach ($qm in [regex]::Matches($cmdLine, '"([^"\r\n]+)"')) {
+        $qv = $qm.Groups[1].Value.Trim()
         if ($qv -match $rootedPrefixRe) { $anchorLiterals.Add($qv) }
     }
-    foreach ($um in [regex]::Matches($cmdLine, '(?i)(?<![A-Za-z0-9_])((?:[A-Za-z]:[\\/]|~[\\/]|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file://)[^\s"''`;|&<>(),=]+)')) {
+    foreach ($qm in [regex]::Matches($cmdLine, '''([^''\r\n]+)''')) {
+        $qv = $qm.Groups[1].Value.Trim()
+        if ($qv -match $rootedPrefixRe) { $anchorLiterals.Add($qv) }
+    }
+    foreach ($um in [regex]::Matches($cmdLine, '(?i)(?<![A-Za-z0-9_.:/-])((?:[A-Za-z]:[\\/]|~[\\/]|\/(?![\/])|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file://)[^\s"''`;|&<>(),=]+)')) {
         $anchorLiterals.Add($um.Groups[1].Value.Trim())
     }
     foreach ($al in $anchorLiterals) {

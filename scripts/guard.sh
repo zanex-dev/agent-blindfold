@@ -537,11 +537,15 @@ def main() -> None:
         tier0_anchor_dirs = []
         anchor_literals = []
         rooted_prefix_re = r"^(?:[A-Za-z]:[\\/]|~[\\/]|/|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file://)"
-        for qm in re.finditer(r"\"([^\"\r\n]+)\"|\x27([^\x27\r\n]+)\x27", cmd_line):
-            qv = (qm.group(1) or qm.group(2) or "").strip()
+        for qm in re.finditer(r"\"([^\"\r\n]+)\"", cmd_line):
+            qv = (qm.group(1) or "").strip()
             if re.match(rooted_prefix_re, qv, re.I):
                 anchor_literals.append(qv)
-        for um in re.finditer(r"(?i)(?<![A-Za-z0-9_])((?:[A-Za-z]:[\\/]|~[\\/]|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file://)[^\s\"\x27`;|&<>(),=]+)", cmd_line):
+        for qm in re.finditer(r"\x27([^\x27\r\n]+)\x27", cmd_line):
+            qv = (qm.group(1) or "").strip()
+            if re.match(rooted_prefix_re, qv, re.I):
+                anchor_literals.append(qv)
+        for um in re.finditer(r"(?i)(?<![A-Za-z0-9_.:/-])((?:[A-Za-z]:[\\/]|~[\\/]|/(?![/])|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file://)[^\s\"\x27`;|&<>(),=]+)", cmd_line):
             anchor_literals.append(um.group(1).strip())
         for al in anchor_literals:
             al_norm = normalize_local_path(al, base_dir).rstrip("\\/")
