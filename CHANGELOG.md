@@ -6,6 +6,19 @@ All notable changes to **`agent-blindfold`** will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-11-11 — Windows CLI Crash Fixes & Shell Option/Subcommand Hardening
+
+### Fixed & Hardened
+- **Crash Fixes on Windows PowerShell 5.1 / .NET 4.8 (`scripts/guard.ps1`)**:
+  - Fixed a `Join-Path` `DriveNotFoundException` (`Cannot find drive. A drive with the name '/out' does not exist`) when commands pass MSVC/.NET/MSBuild slash switches containing colons (`csc "/out:C:\..."`, `/target:winexe`, `/win32icon:...`, `msbuild "/p:OutDir=C:\..."`).
+  - Fixed `.NET Framework 4.8` `ArgumentException` (`Illegal characters in path`) in `GetExtension` / `GetFileName` when shell regexes or pipelines contain `|`, `<`, `>`, or nested quotes (e.g. `rg "hero.jpg|banner.png"`).
+- **Eliminated False-Positive Blocks on Quoted Flags & Compound Subshells in Tier 0 Sandboxes (`scripts/guard.ps1` & `scripts/guard.sh`)**:
+  - Unwraps quoted CLI option prefixes (`"--output=<path>"`, `"/win32icon:<path>"`) and distinguishes multi-argument subshell commands (`powershell -Command "Copy-Item <scratch>\a.png <scratch>\b.png"`) from single literal filenames so Tier 0 sandbox operations are never misclassified when a locked workspace is mounted.
+- **Closed Shell Option-Prefix, `file:` URI, Space-in-Path & Dynamic `cd` Bypasses (`scripts/guard.ps1` & `scripts/guard.sh`)**:
+  - Prevents `Normalize-LocalPath` fallback from prepending an unlocked workspace `BaseDir` onto malformed/embedded-drive tokens, and unwraps `curl` `@`/`key=@` upload tokens, `dd` `if=`, and RFC 8089 `file:<path>` URIs (without `//`) so external/personal media cannot masquerade as relative workspace files.
+  - Extracts space-containing rooted media paths inside quoted subcommands (e.g. `cmd /c "certutil -encode C:\Users\...\Downloads\my secret.png out.txt"`).
+  - Treats `cd` into unexpanded dynamic shell variables (`cd "$d"`) as untrusted when evaluating relative media operations, blocking `d=~/Downloads; cd "$d" && base64 secret.jpg` escapes without affecting non-media loops.
+
 ## [1.1.1] - 2026-11-11 — Tier 0 & Workspace Media Editing Fix
 
 ### Fixed & Hardened

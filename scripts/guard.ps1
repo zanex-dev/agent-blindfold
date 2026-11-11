@@ -145,6 +145,77 @@ function Test-IsWebOrNonLocalUri {
     return $t -match '^(?i)(https?|wss?|data|mailto|about|chrome|javascript|blob):'
 }
 
+function Get-SafeExtension {
+    param([string]$PathStr)
+    if ([string]::IsNullOrWhiteSpace($PathStr)) { return "" }
+    try {
+        return [System.IO.Path]::GetExtension($PathStr).ToLowerInvariant()
+    } catch {
+        if ($PathStr -match '(\.[A-Za-z0-9]+)$') {
+            return $Matches[1].ToLowerInvariant()
+        }
+        return ""
+    }
+}
+
+function Get-SafeFileName {
+    param([string]$PathStr)
+    if ([string]::IsNullOrWhiteSpace($PathStr)) { return "" }
+    try {
+        return [System.IO.Path]::GetFileName($PathStr)
+    } catch {
+        $parts = @($PathStr -split '[\\/]+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($parts.Count -gt 0) { return $parts[$parts.Count - 1] }
+        return $PathStr
+    }
+}
+
+function Join-SafePath {
+    param([string]$Parent, [string]$Child)
+    if ([string]::IsNullOrWhiteSpace($Parent)) { return $Child }
+    if ([string]::IsNullOrWhiteSpace($Child)) { return $Parent }
+    try {
+        return (Join-Path -Path $Parent -ChildPath $Child -ErrorAction Stop)
+    } catch {
+        return ($Parent.TrimEnd('\', '/') + '\' + $Child.TrimStart('\', '/'))
+    }
+}
+
+function Split-SafeParent {
+    param([string]$PathStr)
+    if ([string]::IsNullOrWhiteSpace($PathStr)) { return "" }
+    try {
+        return (Split-Path -Parent $PathStr -ErrorAction Stop)
+    } catch {
+        $trimmed = $PathStr.TrimEnd('\', '/')
+        $idx = $trimmed.LastIndexOfAny([char[]]@('\', '/'))
+        if ($idx -gt 0) { return $trimmed.Substring(0, $idx) }
+        return ""
+    }
+}
+
+function Unwrap-CliOptionValue {
+    param([string]$RawTok)
+    if ([string]::IsNullOrWhiteSpace($RawTok)) { return "" }
+    $cur = $RawTok.Trim()
+    for ($pass = 0; $pass -lt 2; $pass++) {
+        if ($cur.Length -gt 1 -and $cur.StartsWith('@')) {
+            $cur = $cur.Substring(1).Trim()
+            continue
+        }
+        if ($cur -match '^(?:--?[A-Za-z0-9_.-]+|[A-Za-z_][A-Za-z0-9_.-]*)=@?(.+)$') {
+            $cur = $Matches[1].Trim()
+            continue
+        }
+        if ($cur -match '^/[A-Za-z0-9_.-]+:(.+)$') {
+            $cur = $Matches[1].Trim()
+            continue
+        }
+        break
+    }
+    return $cur
+}
+
 function Normalize-LocalPath {
     param(
         [string]$RawPath,
@@ -163,20 +234,25 @@ function Normalize-LocalPath {
         } else {
             $cleaned = $cleaned -replace '^(?i)file://+', '/'
         }
+    } elseif ($cleaned -match '^(?i)file:(.+)$') {
+        $cleaned = $Matches[1] -replace '[?#].*$', ''
+        try {
+            $cleaned = [Uri]::UnescapeDataString($cleaned)
+        } catch {}
     }
 
     $cleaned = [Environment]::ExpandEnvironmentVariables($cleaned)
     $homeDir = Get-EffectiveHomeDir
     if ($cleaned -match '^\$HOME([\\/].*)?$') {
         $sub = if ($Matches[1]) { $Matches[1].TrimStart('/', '\') } else { "" }
-        $cleaned = if ($sub) { Join-Path $homeDir $sub } else { $homeDir }
+        $cleaned = if ($sub) { Join-SafePath $homeDir $sub } else { $homeDir }
     } elseif ($cleaned -match '^\$env:USERPROFILE([\\/].*)?$') {
         $sub = if ($Matches[1]) { $Matches[1].TrimStart('/', '\') } else { "" }
-        $cleaned = if ($sub) { Join-Path $homeDir $sub } else { $homeDir }
+        $cleaned = if ($sub) { Join-SafePath $homeDir $sub } else { $homeDir }
     } elseif ($cleaned.StartsWith('~')) {
         $rest = $cleaned.Substring(1)
         if ($rest.Length -eq 0 -or $rest.StartsWith('/') -or $rest.StartsWith('\')) {
-            $cleaned = Join-Path $homeDir $rest.TrimStart('/', '\')
+            $cleaned = Join-SafePath $homeDir $rest.TrimStart('/', '\')
         }
     }
 
@@ -186,12 +262,18 @@ function Normalize-LocalPath {
 
     # Replace shell wildcards temporarily so .NET 4.8 Path APIs never throw on '*.png'
     $cleanedSafe = ($cleaned -replace '\*', '__WC_STAR__') -replace '\?', '__WC_Q__'
+    $rawFallback = $cleanedSafe
 
     try {
-        if (-not [System.IO.Path]::IsPathRooted($cleanedSafe) -and -not [string]::IsNullOrWhiteSpace($BaseDir)) {
-            $cleanedSafe = Join-Path $BaseDir $cleanedSafe
+        $candSafe = $cleanedSafe
+        $hasEmbeddedDrive = ($candSafe -match '(?<!^)[A-Za-z]:[\\/]')
+        if ($hasEmbeddedDrive) {
+            return $rawFallback
         }
-        $current = [System.IO.Path]::GetFullPath($cleanedSafe)
+        if (-not [System.IO.Path]::IsPathRooted($candSafe) -and -not [string]::IsNullOrWhiteSpace($BaseDir)) {
+            $candSafe = Join-SafePath $BaseDir $candSafe
+        }
+        $current = [System.IO.Path]::GetFullPath($candSafe)
 
         # Iteratively resolve up to 16 hops of file symlinks and directory junctions/reparse points
         for ($hop = 0; $hop -lt 16; $hop++) {
@@ -199,19 +281,19 @@ function Normalize-LocalPath {
             $probe = $current
             $tailParts = New-Object System.Collections.Generic.List[string]
             while (-not [string]::IsNullOrWhiteSpace($probe)) {
-                if (($probe -notmatch '__WC_') -and (Test-Path -LiteralPath $probe)) {
+                if (($probe -notmatch '__WC_') -and (Test-Path -LiteralPath $probe -ErrorAction SilentlyContinue)) {
                     $item = Get-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
                     if ($null -ne $item -and ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -and $item.Target) {
                         $targetVal = if ($item.Target -is [array]) { [string]$item.Target[0] } else { [string]$item.Target }
                         $targetVal = ($targetVal -replace '^(?i)\\\\\?\\UNC\\', '\\') -replace '^(?i)(?:\\\\\?\\|\\\?\?\\)', ''
                         if (-not [string]::IsNullOrWhiteSpace($targetVal)) {
                             if (-not [System.IO.Path]::IsPathRooted($targetVal)) {
-                                $parentOfProbe = Split-Path -Parent $probe
-                                $targetVal = Join-Path $parentOfProbe $targetVal
+                                $parentOfProbe = Split-SafeParent $probe
+                                $targetVal = Join-SafePath $parentOfProbe $targetVal
                             }
                             $rebuilt = $targetVal
                             for ($i = $tailParts.Count - 1; $i -ge 0; $i--) {
-                                $rebuilt = Join-Path $rebuilt $tailParts[$i]
+                                $rebuilt = Join-SafePath $rebuilt $tailParts[$i]
                             }
                             $current = [System.IO.Path]::GetFullPath($rebuilt)
                             $resolvedHop = $true
@@ -219,9 +301,9 @@ function Normalize-LocalPath {
                         }
                     }
                 }
-                $parent = Split-Path -Parent $probe
+                $parent = Split-SafeParent $probe
                 if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $probe) { break }
-                $tailParts.Add((Split-Path -Leaf $probe))
+                $tailParts.Add((Get-SafeFileName $probe))
                 $probe = $parent
             }
             if (-not $resolvedHop) {
@@ -229,9 +311,9 @@ function Normalize-LocalPath {
             }
         }
         # Circular symlink/junction loop (>16 hops): fail closed into HardVault sentinel
-        return (Join-Path (Join-Path (Get-EffectiveHomeDir) 'Pictures') '__reparse_loop_blocked__.png')
+        return (Join-SafePath (Join-SafePath (Get-EffectiveHomeDir) 'Pictures') '__reparse_loop_blocked__.png')
     } catch {
-        return $cleanedSafe
+        return $rawFallback
     }
 }
 
@@ -300,7 +382,7 @@ function Test-IsValidProjectWorkspace {
 
     if (Test-InHardVault $normWs) { return $false }
 
-    $leaf = [System.IO.Path]::GetFileName($normWs).ToLowerInvariant()
+    $leaf = (Get-SafeFileName $normWs).ToLowerInvariant()
     if ($PersonalContainerDirs -contains $leaf) { return $false }
 
     return $true
@@ -314,7 +396,7 @@ function Test-IsProtectedControlTarget {
     if (Test-IsWebOrNonLocalUri $RawTarget) { return $false }
     $norm = (Normalize-LocalPath -RawPath $RawTarget -BaseDir $BaseDir).TrimEnd('\', '/')
     if ([string]::IsNullOrWhiteSpace($norm)) { return $false }
-    $leaf = [System.IO.Path]::GetFileName($norm).ToLowerInvariant()
+    $leaf = (Get-SafeFileName $norm).ToLowerInvariant()
     if ($ProtectedControlLeaves -contains $leaf) { return $true }
 
     # Protect installed plugin/hook directories and host hook configuration manifests from self-tampering
@@ -331,7 +413,7 @@ function Test-IsProtectedControlTarget {
         return $true
     }
     if ($leaf -eq 'hooks.json') {
-        $parentLeaf = [System.IO.Path]::GetFileName((Split-Path -Parent $norm)).ToLowerInvariant()
+        $parentLeaf = (Get-SafeFileName (Split-SafeParent $norm)).ToLowerInvariant()
         if ($parentLeaf -eq '.agents') { return $true }
     }
     return $false
@@ -533,7 +615,7 @@ function Test-IsTier0DirectoryAnchor {
             $matchedWs.Add($ws)
         }
     }
-    $probeFile = Join-Path $NormDir '__tier0_probe__.png'
+    $probeFile = Join-SafePath $NormDir '__tier0_probe__.png'
     return (Test-IsAutoExemptEngineeringSandbox -NormTarget $probeFile -MatchedWorkspaces $matchedWs -ArtifactDirNorm $ArtifactDirNorm -ConversationId $ConversationId)
 }
 
@@ -546,7 +628,7 @@ function Test-IsUnlockedWorkspaceDir {
     if (Test-InHardVault $NormDir) { return $false }
     foreach ($ws in $ValidWorkspaces) {
         if (Test-IsSubPath -TargetNorm $NormDir -WorkspaceNorm $ws) {
-            if ((Evaluate-AllowMediaPass -MarkerPath (Join-Path $ws '.allow_media')) -eq 'valid') {
+            if ((Evaluate-AllowMediaPass -MarkerPath (Join-SafePath $ws '.allow_media')) -eq 'valid') {
                 return $true
             }
         }
@@ -558,7 +640,7 @@ function Test-IsRelativeNonTraversalToken {
     param([string]$RawTok)
     if ([string]::IsNullOrWhiteSpace($RawTok)) { return $false }
     $t = $RawTok.Trim().Trim('"').Trim("'")
-    if ($t -match '^(?i)(?:[A-Za-z]:|[\\/]|~|\$HOME|\$env:USERPROFILE|%USERPROFILE%|file://)') {
+    if ($t -match '^(?i)(?:[A-Za-z]:|[\\/]|~|\$HOME|\$env:USERPROFILE|%USERPROFILE%|file:)') {
         return $false
     }
     foreach ($seg in ($t -split '[\\/]+')) {
@@ -580,7 +662,7 @@ function Evaluate-MediaPath {
     $normTarget = Normalize-LocalPath -RawPath $RawTarget -BaseDir $BaseDir
     if ([string]::IsNullOrWhiteSpace($normTarget)) { return $null }
 
-    $ext = [System.IO.Path]::GetExtension($normTarget).ToLowerInvariant()
+    $ext = Get-SafeExtension $normTarget
     $inHardVault = Test-InHardVault $normTarget
     $inPersonalContainer = Test-InPersonalContainer $normTarget
 
@@ -742,10 +824,16 @@ if (-not [string]::IsNullOrWhiteSpace($cmdLine)) {
     $safeCdDirs   = New-Object System.Collections.Generic.List[string]
     $unsafeCdDirs = New-Object System.Collections.Generic.List[string]
     $cdPattern = '(?i)(?:^|[;|&(\r\n])\s*(?:cd(?:\s+/d)?|chdir|pushd|Set-Location|Push-Location|sl)\s+(?:-(?:Path|LiteralPath)\s+)?(?:"([^"\r\n]+)"|''([^''\r\n]+)''|([^\s"''`;|&<>()\r\n]+))'
+    $dynamicVarRe = '(?i)(?:\$(?!HOME(?:[\\/]|$)|env:USERPROFILE(?:[\\/]|$))[A-Za-z_{0-9]|%(?!USERPROFILE%)[A-Za-z_][A-Za-z0-9_]*%)'
     $runBase = $baseDir
     foreach ($cm in [regex]::Matches($cmdLine, $cdPattern)) {
         $cdRaw = if ($cm.Groups[1].Success) { $cm.Groups[1].Value } elseif ($cm.Groups[2].Success) { $cm.Groups[2].Value } else { $cm.Groups[3].Value }
         if ([string]::IsNullOrWhiteSpace($cdRaw) -or $cdRaw -eq '-') { continue }
+        if ($cdRaw -match $dynamicVarRe) {
+            $dynSentinel = Join-SafePath (Get-EffectiveHomeDir) '__dynamic_cd_untrusted__'
+            if (-not ($unsafeCdDirs -contains $dynSentinel)) { $unsafeCdDirs.Add($dynSentinel) }
+            continue
+        }
         $cdNorm = (Normalize-LocalPath -RawPath $cdRaw -BaseDir $runBase).TrimEnd('\', '/')
         if ([string]::IsNullOrWhiteSpace($cdNorm)) { continue }
         $runBase = $cdNorm
@@ -759,23 +847,24 @@ if (-not [string]::IsNullOrWhiteSpace($cmdLine)) {
 
     $tier0AnchorDirs = New-Object System.Collections.Generic.List[string]
     $anchorLiterals  = New-Object System.Collections.Generic.List[string]
-    $rootedPrefixRe  = '^(?i)(?:[A-Za-z]:[\\/]|~[\\/]|\/|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file://)'
+    $rootedPrefixRe  = '^(?i)(?:[A-Za-z]:[\\/]|~[\\/]|\/(?![A-Za-z0-9_.-]+[:=])|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file:(?://)?)'
     foreach ($qm in [regex]::Matches($cmdLine, '"([^"\r\n]+)"')) {
-        $qv = $qm.Groups[1].Value.Trim()
+        $qv = Unwrap-CliOptionValue $qm.Groups[1].Value
         if ($qv -match $rootedPrefixRe) { $anchorLiterals.Add($qv) }
     }
     foreach ($qm in [regex]::Matches($cmdLine, '''([^''\r\n]+)''')) {
-        $qv = $qm.Groups[1].Value.Trim()
+        $qv = Unwrap-CliOptionValue $qm.Groups[1].Value
         if ($qv -match $rootedPrefixRe) { $anchorLiterals.Add($qv) }
     }
-    foreach ($um in [regex]::Matches($cmdLine, '(?i)(?<![A-Za-z0-9_.:/-])((?:[A-Za-z]:[\\/]|~[\\/]|\/(?![\/])|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file://)[^\s"''`;|&<>(),=]+)')) {
-        $anchorLiterals.Add($um.Groups[1].Value.Trim())
+    foreach ($um in [regex]::Matches($cmdLine, '(?i)(?<![A-Za-z0-9_.:/-])((?:--?[A-Za-z0-9_.-]+=|/[A-Za-z0-9_.-]+:|@)?(?:[A-Za-z]:[\\/]|~[\\/]|\/(?![\/])|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file:(?://)?)[^\s"''`;|&<>(),=]+)')) {
+        $uv = Unwrap-CliOptionValue $um.Groups[1].Value
+        if ($uv -match $rootedPrefixRe) { $anchorLiterals.Add($uv) }
     }
     foreach ($al in $anchorLiterals) {
         $alNorm = (Normalize-LocalPath -RawPath $al -BaseDir $baseDir).TrimEnd('\', '/')
         if ([string]::IsNullOrWhiteSpace($alNorm)) { continue }
         $candDirs = @($alNorm)
-        $parentAl = Split-Path -Parent $alNorm
+        $parentAl = Split-SafeParent $alNorm
         if (-not [string]::IsNullOrWhiteSpace($parentAl)) { $candDirs += $parentAl }
         foreach ($cdCand in $candDirs) {
             if (Test-IsTier0DirectoryAnchor -NormDir $cdCand -ValidWorkspaces $validWorkspaces -ArtifactDirNorm $artifactDirNorm -ConversationId $conversationId) {
@@ -785,18 +874,37 @@ if (-not [string]::IsNullOrWhiteSpace($cmdLine)) {
         }
     }
 
-    # A3: Extract media file path tokens (double-quoted, single-quoted, or unquoted)
+    # A3: Extract media file path tokens (double-quoted, single-quoted, embedded rooted paths with spaces, or unquoted)
     $extGroup = 'jpg|jpeg|png|gif|webp|bmp|ico|heic|heif|avif|mp4|mkv|avi|mov|webm|flv|wmv|mp3|wav|flac|m4a|ogg|aac|svg'
     $shellTokens = New-Object System.Collections.Generic.List[string]
+    $embeddedRootedMediaRe = "(?i)(?:^|(?<=[\s=@:]))((?:[A-Za-z]:[\\/]|~[\\/]|\/(?![\/])[A-Za-z0-9_.-]+[\\/]|\`$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file:(?://)?)(?:(?![A-Za-z]:[\\/]|\s+\/[A-Za-z0-9_.-]+[\\/])[^`"''``|;&<>()\r\n])*?\.(?:$extGroup))(?![A-Za-z0-9_])"
+    $compoundArgSepRe = '(?i)\s+(?:--?[A-Za-z0-9_.-]+=|/[A-Za-z0-9_.-]+:|@)?(?:[A-Za-z]:[\\/]|~[\\/]|\/(?![\/])[A-Za-z0-9_.-]+[\\/]|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file:(?://)?)'
 
-    foreach ($m in [regex]::Matches($cmdLine, "(?i)`"([^`"\r\n]+\.(?:$extGroup))`"")) {
-        $shellTokens.Add($m.Groups[1].Value)
+    $quotedCaptures = New-Object System.Collections.Generic.List[string]
+    foreach ($m in [regex]::Matches($cmdLine, '"([^"\r\n]+)"')) {
+        $quotedCaptures.Add($m.Groups[1].Value)
     }
-    foreach ($m in [regex]::Matches($cmdLine, "(?i)'([^'\r\n]+\.(?:$extGroup))'")) {
-        $shellTokens.Add($m.Groups[1].Value)
+    foreach ($m in [regex]::Matches($cmdLine, '''([^''\r\n]+)''')) {
+        $quotedCaptures.Add($m.Groups[1].Value)
     }
+
+    foreach ($qRaw in $quotedCaptures) {
+        foreach ($em in [regex]::Matches($qRaw, $embeddedRootedMediaRe)) {
+            $eVal = $em.Groups[1].Value.Trim()
+            if (-not [string]::IsNullOrWhiteSpace($eVal)) { $shellTokens.Add($eVal) }
+        }
+        $qUnwrapped = Unwrap-CliOptionValue $qRaw
+        if ($qUnwrapped -match "(?i)\.(?:$extGroup)$") {
+            $isCompoundOrRegex = ($qUnwrapped -match '[|;<>`\r\n]|\$\(|@\(') -or ($qUnwrapped -match $compoundArgSepRe)
+            if (-not $isCompoundOrRegex) {
+                $shellTokens.Add($qUnwrapped)
+            }
+        }
+    }
+
     foreach ($m in [regex]::Matches($cmdLine, "(?i)(?<![A-Za-z0-9_.:/-])([^\s`"''`|;&<>(),=]+\.(?:$extGroup))(?![A-Za-z0-9_])")) {
-        $shellTokens.Add($m.Groups[1].Value)
+        $uTok = Unwrap-CliOptionValue $m.Groups[1].Value
+        if (-not [string]::IsNullOrWhiteSpace($uTok)) { $shellTokens.Add($uTok) }
     }
 
     $isSafeGitMeta = (-not $hasChainOp) -and ($cmdLine -match '^\s*git\s+(?:commit|status|log|branch|tag|push|pull|fetch)\b')
@@ -828,12 +936,12 @@ if (-not [string]::IsNullOrWhiteSpace($cmdLine)) {
             $isTemplateTok = ($tok -match '\{[^}]+\}|%[0-9]*[sdxX]')
             $existsInLockedBase = $false
             if (-not [string]::IsNullOrWhiteSpace($effectiveBaseDir)) {
-                $candLocked = Join-Path $effectiveBaseDir $tok
+                $candLocked = Join-SafePath $effectiveBaseDir $tok
                 if ($tok -match '[\*\?]') {
                     if (Get-ChildItem -Path $candLocked -Force -ErrorAction SilentlyContinue | Select-Object -First 1) {
                         $existsInLockedBase = $true
                     }
-                } elseif (Test-Path -LiteralPath $candLocked) {
+                } elseif (Test-Path -LiteralPath $candLocked -ErrorAction SilentlyContinue) {
                     $existsInLockedBase = $true
                 }
             }

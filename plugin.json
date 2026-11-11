@@ -1,7 +1,7 @@
 {
   "name": "agent-blindfold",
   "displayName": "Agent Blindfold (Heart-Under-Blade)",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Zero-trust local media privacy & anti-ban physical firewall (SessionStart + PreToolUse Hook) with smart engineering sandbox auto-exemption & timed/permanent passes for AI Coding Agents (Google Antigravity & Claude Code). Codename: Heart-Under-Blade (刃下心).",
   "author": {
     "name": "琢玹 (zanex-dev)",

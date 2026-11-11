@@ -140,6 +140,26 @@ def is_web_uri(raw: str) -> bool:
     return bool(re.match(r"^(https?|wss?|data|mailto|about|chrome|javascript|blob):", t, re.I))
 
 
+def unwrap_cli_option_value(raw_tok: str) -> str:
+    if not raw_tok or not raw_tok.strip():
+        return ""
+    cur = raw_tok.strip()
+    for _ in range(2):
+        if len(cur) > 1 and cur.startswith("@"):
+            cur = cur[1:].strip()
+            continue
+        m = re.match(r"^(?:--?[A-Za-z0-9_.-]+|[A-Za-z_][A-Za-z0-9_.-]*)=@?(.+)$", cur)
+        if m:
+            cur = m.group(1).strip()
+            continue
+        m = re.match(r"^/[A-Za-z0-9_.-]+:(.+)$", cur)
+        if m:
+            cur = m.group(1).strip()
+            continue
+        break
+    return cur
+
+
 def normalize_local_path(raw: str, base_dir: str = "") -> str:
     if not raw or not raw.strip():
         return ""
@@ -152,6 +172,10 @@ def normalize_local_path(raw: str, base_dir: str = "") -> str:
             cleaned = m.group(1)
         else:
             cleaned = re.sub(r"^file://+", "/", cleaned, flags=re.I)
+    elif re.match(r"^file:(.+)$", cleaned, re.I):
+        cleaned = re.sub(r"^file:", "", cleaned, count=1, flags=re.I)
+        cleaned = re.sub(r"[?#].*$", "", cleaned)
+        cleaned = urllib.parse.unquote(cleaned)
 
     home = get_effective_home()
     cleaned = re.sub(r"^\$HOME(?=[\\/]|$)", home.replace("\\", "/"), cleaned)
@@ -164,7 +188,11 @@ def normalize_local_path(raw: str, base_dir: str = "") -> str:
     cleaned = cleaned.rstrip(". ")
     cleaned = cleaned.replace("*", "__WC_STAR__").replace("?", "__WC_Q__")
 
-    if not os.path.isabs(cleaned) and base_dir:
+    has_embedded_drive = bool(re.search(r"(?<!^)[A-Za-z]:[\\/]", cleaned))
+    if has_embedded_drive:
+        return cleaned.lower()
+
+    if not os.path.isabs(cleaned) and not cleaned.startswith(("/", "\\")) and base_dir:
         cleaned = os.path.join(base_dir, cleaned)
 
     return os.path.normcase(os.path.realpath(os.path.abspath(cleaned)))
@@ -388,7 +416,7 @@ def is_relative_non_traversal_token(raw_tok: str) -> bool:
     if not raw_tok or not raw_tok.strip():
         return False
     t = raw_tok.strip().strip("\"").strip("\x27")
-    if re.match(r"^(?:[A-Za-z]:|[\\/]|~|\$HOME|\$env:USERPROFILE|%USERPROFILE%|file://)", t, re.I):
+    if re.match(r"^(?:[A-Za-z]:|[\\/]|~|\$HOME|\$env:USERPROFILE|%USERPROFILE%|file:)", t, re.I):
         return False
     return ".." not in re.split(r"[\\/]+", t)
 
@@ -518,10 +546,16 @@ def main() -> None:
         safe_cd_dirs = []
         unsafe_cd_dirs = []
         cd_re = r"(?i)(?:^|[;|&(\r\n])\s*(?:cd(?:\s+/d)?|chdir|pushd|Set-Location|Push-Location|sl)\s+(?:-(?:Path|LiteralPath)\s+)?(?:\"([^\"\r\n]+)\"|\x27([^\x27\r\n]+)\x27|([^\s\"\x27`;|&<>()\r\n]+))"
+        dynamic_var_re = r"(?i)(?:\$(?!HOME(?:[\\/]|$)|env:USERPROFILE(?:[\\/]|$))[A-Za-z_{0-9]|%(?!USERPROFILE%)[A-Za-z_][A-Za-z0-9_]*%)"
         run_base = base_dir
         for cm in re.finditer(cd_re, cmd_line):
             cd_raw = cm.group(1) or cm.group(2) or cm.group(3) or ""
             if not cd_raw.strip() or cd_raw.strip() == "-":
+                continue
+            if re.search(dynamic_var_re, cd_raw):
+                dyn_sentinel = os.path.join(get_effective_home(), "__dynamic_cd_untrusted__")
+                if dyn_sentinel not in unsafe_cd_dirs:
+                    unsafe_cd_dirs.append(dyn_sentinel)
                 continue
             cd_norm = normalize_local_path(cd_raw, run_base).rstrip("\\/")
             if not cd_norm:
@@ -536,17 +570,19 @@ def main() -> None:
 
         tier0_anchor_dirs = []
         anchor_literals = []
-        rooted_prefix_re = r"^(?:[A-Za-z]:[\\/]|~[\\/]|/|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file://)"
+        rooted_prefix_re = r"^(?:[A-Za-z]:[\\/]|~[\\/]|/(?![A-Za-z0-9_.-]+[:=])|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file:(?://)?)"
         for qm in re.finditer(r"\"([^\"\r\n]+)\"", cmd_line):
-            qv = (qm.group(1) or "").strip()
+            qv = unwrap_cli_option_value(qm.group(1) or "")
             if re.match(rooted_prefix_re, qv, re.I):
                 anchor_literals.append(qv)
         for qm in re.finditer(r"\x27([^\x27\r\n]+)\x27", cmd_line):
-            qv = (qm.group(1) or "").strip()
+            qv = unwrap_cli_option_value(qm.group(1) or "")
             if re.match(rooted_prefix_re, qv, re.I):
                 anchor_literals.append(qv)
-        for um in re.finditer(r"(?i)(?<![A-Za-z0-9_.:/-])((?:[A-Za-z]:[\\/]|~[\\/]|/(?![/])|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file://)[^\s\"\x27`;|&<>(),=]+)", cmd_line):
-            anchor_literals.append(um.group(1).strip())
+        for um in re.finditer(r"(?i)(?<![A-Za-z0-9_.:/-])((?:--?[A-Za-z0-9_.-]+=|/[A-Za-z0-9_.-]+:|@)?(?:[A-Za-z]:[\\/]|~[\\/]|/(?![/])|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file:(?://)?)[^\s\"\x27`;|&<>(),=]+)", cmd_line):
+            uv = unwrap_cli_option_value(um.group(1) or "")
+            if re.match(rooted_prefix_re, uv, re.I):
+                anchor_literals.append(uv)
         for al in anchor_literals:
             al_norm = normalize_local_path(al, base_dir).rstrip("\\/")
             if not al_norm:
@@ -563,9 +599,28 @@ def main() -> None:
 
         ext_grp = "jpg|jpeg|png|gif|webp|bmp|ico|heic|heif|avif|mp4|mkv|avi|mov|webm|flv|wmv|mp3|wav|flac|m4a|ogg|aac|svg"
         tokens = []
-        tokens.extend(re.findall(rf"(?i)\"([^\"\r\n]+\.(?:{ext_grp}))\"", cmd_line))
-        tokens.extend(re.findall(rf"(?i)\x27([^\x27\r\n]+\.(?:{ext_grp}))\x27", cmd_line))
-        tokens.extend(re.findall(rf"(?i)(?<![A-Za-z0-9_.:/-])([^\s\"\x27`|;&<>(),=]+\.(?:{ext_grp}))(?![A-Za-z0-9_])", cmd_line))
+        embedded_rooted_re = rf"(?i)(?:^|(?<=[\s=@:]))((?:[A-Za-z]:[\\/]|~[\\/]|/(?![/])[A-Za-z0-9_.-]+[\\/]|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file:(?://)?)(?:(?![A-Za-z]:[\\/]|\s+/[A-Za-z0-9_.-]+[\\/])[^\"\x27`|;&<>()\r\n])*?\.(?:{ext_grp}))(?![A-Za-z0-9_])"
+        compound_sep_re = r"(?i)\s+(?:--?[A-Za-z0-9_.-]+=|/[A-Za-z0-9_.-]+:|@)?(?:[A-Za-z]:[\\/]|~[\\/]|/(?![/])[A-Za-z0-9_.-]+[\\/]|\$(?:HOME|env:USERPROFILE)[\\/]|%USERPROFILE%[\\/]|file:(?://)?)"
+
+        quoted_caps = []
+        quoted_caps.extend(re.findall(r"\"([^\"\r\n]+)\"", cmd_line))
+        quoted_caps.extend(re.findall(r"\x27([^\x27\r\n]+)\x27", cmd_line))
+
+        for q_raw in quoted_caps:
+            for em in re.finditer(embedded_rooted_re, q_raw):
+                ev = (em.group(1) or "").strip()
+                if ev:
+                    tokens.append(ev)
+            q_unwrapped = unwrap_cli_option_value(q_raw)
+            if re.search(rf"(?i)\.(?:{ext_grp})$", q_unwrapped):
+                is_compound = bool(re.search(r"[|;<>`\r\n]|\$\(|@\(", q_unwrapped)) or bool(re.search(compound_sep_re, q_unwrapped))
+                if not is_compound:
+                    tokens.append(q_unwrapped)
+
+        for um_tok in re.findall(rf"(?i)(?<![A-Za-z0-9_.:/-])([^\s\"\x27`|;&<>(),=]+\.(?:{ext_grp}))(?![A-Za-z0-9_])", cmd_line):
+            u_tok = unwrap_cli_option_value(um_tok)
+            if u_tok:
+                tokens.append(u_tok)
 
         is_safe_git = (not has_chain) and bool(re.match(r"^\s*git\s+(?:commit|status|log|branch|tag|push|pull|fetch)\b", cmd_line))
         is_dumper = (not is_safe_git_repo) and bool(re.search(

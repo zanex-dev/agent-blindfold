@@ -8,6 +8,21 @@
 
 ---
 
+## [1.1.2] - 2026-11-11 — Windows 编译器开关崩溃修复与终端子命令/参数前缀防绕过加固
+
+### 🛠️ 修复与加固
+- **修复 Windows PowerShell 5.1（.NET 4.8）下的两类钩子异常崩溃（`scripts/guard.ps1`）**：
+  - 修复执行 `csc.exe "/out:C:\..."`、`/target:winexe`、`/win32icon:...`、`msbuild "/p:OutDir=C:\..."` 等带冒号的 Windows 斜杠参数开关时，被误识别为 POSIX 根路径并触发 `Join-Path` `DriveNotFoundException`（`Cannot find drive '/out'`）导致 `PreToolUse` 钩子报错退出的问题。
+  - 修复终端正则检索或管道子命令（如 `rg "hero.jpg|banner.png"`）包含 `|`、`<`、`>` 等非路径字符时，触发 `.NET Framework 4.8` `Path.GetExtension` / `GetFileName` 抛出 `Illegal characters in path` 异常的问题。
+- **消除带引号 CLI 参数与复合子命令在 Tier 0 沙盒中的误杀（`scripts/guard.ps1` & `scripts/guard.sh`）**：
+  - 支持自动剥离引号内的 CLI 参数赋值前缀（如 `"--output=<path>"`、`"/win32icon:<path>"`），并精准区分复合子命令字符串（如 `powershell -Command "Copy-Item <scratch>\a.png <scratch>\b.png"`）与单一路径，避免在挂载未解锁工作区时误拦截 Tier 0 沙盒操作。
+- **封堵参数前缀粘连、无双斜杠 `file:` 协议、含空格内嵌路径与动态变量 `cd` 四类绕过漏洞（`scripts/guard.ps1` & `scripts/guard.sh`）**：
+  - 修复 `Normalize-LocalPath` 异常回退与内嵌盘符拼接逻辑，并剥离 `curl -F "file=@..."`、`"@..."`、`dd "if=..."` 及 `ffmpeg -i "file:..."`（无 `//` 的 `file:` URI）前缀，彻底阻断外部或私人目录媒体伪装成已解锁工作区相对路径的绕过路径。
+  - 支持从引号包裹的子命令中提取含空格的绝对路径媒体文件（如 `cmd /c "certutil -encode C:\Users\...\Downloads\my secret.png out.txt"`）。
+  - 将指向未展开动态 Shell 变量的目录切换（如 `d=~/Downloads; cd "$d" && base64 secret.jpg`）标记为不可信基目录，在零干扰普通构建循环（如 `for d in pkg/*; do (cd "$d" && npm test); done`）的前提下封堵动态目录逃逸。
+
+---
+
 ## [1.1.1] - 2026-11-11 — 自有工作区沙盒（Tier 0）媒体编辑与切片放行修复
 
 ### 🛠️ 修复与加固
