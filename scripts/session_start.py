@@ -5,6 +5,9 @@ import re
 import sys
 import urllib.parse
 
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 HARD_VAULT_DIRS = {"pictures", "videos", "music", "appdata"}
 PERSONAL_CONTAINER_DIRS = {"desktop", "downloads", "documents"}
 

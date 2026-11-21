@@ -6,6 +6,9 @@ import re
 import sys
 import urllib.parse
 
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 MEDIA_EXTS = {
     ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".heic", ".heif", ".avif",
     ".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv",

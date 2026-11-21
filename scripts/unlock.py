@@ -6,6 +6,10 @@ import re
 import sys
 import time
 
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 HARD_VAULT_DIRS = {"pictures", "videos", "music", "appdata"}
 PERSONAL_CONTAINER_DIRS = {"desktop", "downloads", "documents"}
 

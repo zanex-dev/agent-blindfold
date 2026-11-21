@@ -65,18 +65,33 @@ function Write-StateJson([string]$Path, $Object) {
 function Invoke-GrantLocked([string]$Path, [scriptblock]$Operation) {
     $lockPath = [IO.Path]::ChangeExtension($Path,'.lock')
     Assert-StatePath $lockPath -CreateParents
+    $deadline = [DateTime]::UtcNow.AddSeconds(4)
     $file = [IO.File]::Open($lockPath,'OpenOrCreate','ReadWrite',[IO.FileShare]::ReadWrite)
+    $rangeLocked = $false
     try {
-        $deadline = [DateTime]::UtcNow.AddSeconds(4)
         while ($true) {
-            try { $file.Lock(0,1); break }
+            try { $file.Lock(0,1); $rangeLocked = $true; break }
+            catch [PlatformNotSupportedException] {
+                $file.Dispose()
+                $file = $null
+                while ($true) {
+                    try {
+                        $file = [IO.File]::Open($lockPath,'OpenOrCreate','ReadWrite',[IO.FileShare]::None)
+                        break
+                    } catch [IO.IOException] {
+                        if ([DateTime]::UtcNow -ge $deadline) { throw }
+                        Start-Sleep -Milliseconds 30
+                    }
+                }
+                break
+            }
             catch [IO.IOException] {
                 if ([DateTime]::UtcNow -ge $deadline) { throw }
                 Start-Sleep -Milliseconds 30
             }
         }
-        try { & $Operation } finally { $file.Unlock(0,1) }
-    } finally { $file.Dispose() }
+        try { & $Operation } finally { if ($rangeLocked -and $file) { $file.Unlock(0,1) } }
+    } finally { if ($file) { $file.Dispose() } }
 }
 
 function Read-Grant([string]$Path) {
