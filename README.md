@@ -6,7 +6,7 @@
 
 ### *"Keep your AI Agent's eyes on the code, not on your private stash."*
 
-**Codename: `Heart-Under-Blade` (`刃下心`) · v1.1**
+**Codename: `Heart-Under-Blade` (`刃下心`) · v1.2.0**
 
 [![CI](https://github.com/zanex-dev/agent-blindfold/actions/workflows/ci.yml/badge.svg)](https://github.com/zanex-dev/agent-blindfold/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-gold.svg)](./LICENSE)
@@ -17,6 +17,13 @@
 **English** | [简体中文](./README_zh.md) · [Changelog](./CHANGELOG.md)
 
 </div>
+
+### ✨ What's New in v1.2.0 (User-Scoped Grants & Fail-Closed Hardening)
+Workspace grants now live in the current user's private store (`~/.gemini/config/agent-blindfold-grants/`) and use the canonical workspace path as identity. Issuing, renewing, or revoking a grant never modifies project files or Git metadata—cleanly supporting regular repositories, linked worktrees, and submodules without dirtying `git status`.
+
+The Unix/Bash hooks require Python 3.9 or newer. They probe the active virtual environment, working executables on `PATH` (skipping empty WindowsApps alias stubs under Git Bash), and the Windows `py` launcher where available; a missing interpreter or malformed hook payload fails closed with a host-compatible blocking response.
+
+**Upgrading existing workspaces from v1.1.x:** Legacy in-project `.allow_media` files are now ignored and left intact so untrusted repositories cannot ship pre-unlocked passes. Review each workspace path and use the local controller (`unlock.ps1` / `unlock.sh` / `blindfold-control.cmd`) to reissue any manual timed or permanent grants you want to keep. Default `timed` policy still renews at each eligible session start; set `off` to require manual approval for each new grant. Existing local grants can be revoked individually, and an invalid policy file pauses new automatic issuance rather than falling back to auto-grant. Status output displays the effective settings for the current process along with their sources.
 
 ---
 
@@ -30,7 +37,7 @@ Relying solely on system prompts (`GEMINI.md` / `CLAUDE.md`) is a **gentleman's 
 
 **`agent-blindfold` (`Heart-Under-Blade / 刃下心`)** enforces **Dual-Layer Zero-Trust Protection** without blinding frontend/UI engineering:
 - **Layer 1 — Soft Prompt Discipline (`rules/AGENTS.md`)**: Instructs the agent upfront to skip personal/external binary media while permitting legitimate UI/frontend verification assets.
-- **Layer 2 — Hard OS Physical Firewall (`SessionStart` + `PreToolUse` Hooks)**: Automatically grants **Timed (TTL)** or **Permanent** workspace passes at the start of engineering sessions, exempts UI sandboxes (`scratch`, `brain`, `.playwright-mcp`, `.svg`), and physically blocks personal vaults, external directories, and Agent self-unlock tampering milliseconds before disk access.
+- **Layer 2 — Host Tool-Call Guard (`SessionStart` + `PreToolUse` Hooks)**: Automatically grants **Timed (TTL)** or **Permanent** workspace passes at the start of engineering sessions, exempts UI sandboxes (`scratch`, `brain`, `.playwright-mcp`, `.svg`), and checks protected media paths and attempted policy changes before covered host tool calls.
 
 ---
 
@@ -39,7 +46,7 @@ Relying solely on system prompts (`GEMINI.md` / `CLAUDE.md`) is a **gentleman's 
 ```mermaid
 flowchart TD
     S["SessionStart Hook<br/>(session_start.ps1 / session_start.sh)"] --> S1{"Engineering Workspace?<br/>(Skips Vaults & Read-Only Chat)"}
-    S1 -- "Yes" --> S2["Auto-Issues .allow_media Pass<br/>(Timed Default 2h OR Permanent)<br/>+ Adds to .git/info/exclude"]
+    S1 -- "Yes" --> S2["Issues user-owned workspace grant<br/>(Timed Default 2h OR Permanent)<br/>in private user state"]
 
     A["Agent invokes Tool<br/>(read_file / Read / Write / MCP / run_command / Bash)"] --> T{"Anti-Tamper Guard:<br/>Touches .allow_media / policy / unlock.*?"}
     T -- "Yes (Mutation / Exec)" --> DENYT["🚫 HARD DENY<br/>(Blocks Agent Self-Unlock)"]
@@ -51,7 +58,7 @@ flowchart TD
     E0 -- "Yes (Symlink-Verified)" --> ALLOW
     E0 -- "No" --> E{"Tier 2: Inside a Dedicated<br/>Active Project Workspace?"}
     E -- "No (External Path / Sibling Leak)" --> DENY2["🚫 HARD DENY<br/>(External Directory Isolation)"]
-    E -- "Yes" --> F{"Tier 3: Valid .allow_media Pass?<br/>(Permanent or Unexpired Timed TTL)"}
+    E -- "Yes" --> F{"Tier 3: Valid local workspace grant?<br/>(Permanent or Unexpired Timed TTL)"}
     F -- "No / Expired (Auto-Cleaned)" --> DENY3["🔒 DEFAULT DENY<br/>(Blocks Read & Shell Byte-Dump;<br/>Allows Safe Git Ops)"]
     F -- "Yes" --> ALLOW
 ```
@@ -67,10 +74,10 @@ flowchart TD
 | **Tier 1: Hard Personal Vaults** | `Pictures`, `Videos`, `Music`, `AppData`, plus root `Desktop`, `Downloads`, `Documents` | **Unconditional `deny`** | Permanently locked—even if `~/Downloads` itself is opened as a workspace or contains `.allow_media`. Evaluated **after** symlink/junction resolution. |
 | **Tier 0: Engineering Sandboxes** | `~/.gemini/antigravity/scratch/<subproject>`, active `artifactDirectoryPath` (`brain/<current-id>`), `<workspace>/.playwright-mcp/` | **Auto-Exempt (`allow`)** | Keeps frontend/SVG/Playwright UI visual checks working seamlessly even when no Active Workspace is mounted, while blocking cross-session `.user_uploaded/` leaks. |
 | **Tier 2: External Directories** | Any path outside your active dedicated project workspace (`workspacePaths` / `cwd`) | **Unconditional `deny`** | Blocks cross-drive snooping, `../` traversals, symlinks, and sibling files in parent folders. |
-| **Tier 3: Dedicated Project Workspace** | Project assets inside a specific repo (including repos cloned under `~/Downloads/my-app` or `~/Desktop/my-app`) | **`SessionStart` Auto-Pass (`timed` / `permanent`) or Manual Pass** | Automatically receives a timed (`2h` default) or permanent `.allow_media` pass at session start (configurable to `off` for strict manual mode); expired passes auto-clean themselves. |
+| **Tier 3: Dedicated Project Workspace** | Project assets inside a specific repo (including repos cloned under `~/Downloads/my-app` or `~/Desktop/my-app`) | **`SessionStart` Auto-Pass (`timed` / `permanent`) or Manual Pass** | Automatically receives a timed (`2h` default) or permanent local grant at session start (configurable to `off` for strict manual mode); expired passes auto-clean themselves. |
 
 ### Built-In Bypass & Anti-Tamper Hardening
-- **Anti-Tamper Guard (Zero Self-Unlock)**: Intercepts `write_file`, `edit_file`, `Write`, `Edit`, `MultiEdit`, MCP write tools, and terminal commands (`run_command` / `Bash`) so AI Agents can **never** create, edit, forge, or delete `.allow_media`, `agent-blindfold.json`, or run `unlock.ps1` / `unlock.sh`.
+- **Anti-Tamper Guard (Zero Self-Unlock)**: Intercepts `write_file`, `edit_file`, `Write`, `Edit`, `MultiEdit`, MCP write tools, and terminal commands (`run_command` / `Bash`) so AI Agents can **never** create, edit, forge, or delete local grants (`agent-blindfold-grants/`), legacy `.allow_media` markers, `agent-blindfold.json`, or run `unlock.ps1` / `unlock.sh`.
 - **Shell / Terminal Guard (`run_command` & `Bash`)**: Blocks directory scans on `Pictures`/`Videos`/`Music`, blocks shell commands touching personal/external media, blocks command-chained `git` spoofing (`git status && base64 a.png`), and blocks content-encoding bypasses (`base64`, `certutil`, `xxd`, `PIL`, `cv2`, `ffmpeg`, `magick`, `tesseract`) on locked workspace media—without breaking `git status`, `git add`, or `git commit`.
 - **MCP & URI Normalization**: Inspects nested `call_mcp_tool` arguments (`markitdown`, `filesystem`, `playwright`), decodes percent-encoded `file://` URIs (`%20`), strips NTFS `::$DATA` streams, resolves symlinks, and ignores public `https://` web URLs.
 - **Zero Permission Hijacking on Claude Code**: Exits `0` with **empty `stdout`** when allowing a tool call or `SessionStart` event on Claude Code, deferring cleanly to Claude Code's native permission prompts.
@@ -131,7 +138,7 @@ You can switch global `SessionStart` policy or issue/revoke per-workspace passes
 
 ### Windows PowerShell (`scripts/unlock.ps1`)
 ```powershell
-# Grant a 2-hour timed pass (auto-expires & cleans up; hidden via .git/info/exclude)
+# Grant a 2-hour timed pass (expires automatically; stored in the user profile)
 powershell -ExecutionPolicy Bypass -File .\scripts\unlock.ps1 -Mode timed -TTL 2h -Workspace C:\path\to\my-app
 
 # Grant a permanent pass to a trusted frontend project
@@ -166,10 +173,11 @@ By default, block reasons are emitted in concise **English + Chinese** (`bilingu
 
 ## 🧪 Running the Automated Test Suite
 
-`agent-blindfold` ships with a comprehensive cross-platform end-to-end security & sandboxed installer test suite (`tests/run_tests.py`) with zero external dependencies:
+`agent-blindfold` ships with zero-dependency cross-platform end-to-end security, local grant store, and sandboxed installer test suites (`tests/run_tests.py` and `tests/test_local_grants.py`):
 
 ```bash
 python tests/run_tests.py
+python -m unittest discover -s tests -p test_local_grants.py -v
 ```
 
 ---
@@ -179,33 +187,42 @@ python tests/run_tests.py
 ```text
 agent-blindfold/
 ├── .github/workflows/
-│   └── ci.yml                 # Multi-OS GitHub Actions CI (Windows, Ubuntu, macOS)
+│   └── ci.yml                   # Multi-OS GitHub Actions CI (Windows, Ubuntu, macOS)
 ├── assets/
-│   └── shinobu-banner.svg     # Project vector banner (Heart-Under-Blade)
+│   └── shinobu-banner.svg       # Project vector banner (Heart-Under-Blade)
 ├── docs/
-│   └── v1.1-exemption-design.md # Architecture & security specification for v1.1
+│   └── v1.1-exemption-design.md # Historical v1.1 architecture & security specification
 ├── rules/
-│   └── AGENTS.md              # Layer 1 soft prompt media-isolation rule (Antigravity Plugin)
+│   └── AGENTS.md                # Layer 1 soft prompt media-isolation rule (Antigravity Plugin)
 ├── scripts/
-│   ├── guard.ps1              # Windows PowerShell PreToolUse firewall + Anti-Tamper Guard
-│   ├── guard.sh               # macOS / Linux PreToolUse firewall + Anti-Tamper Guard
-│   ├── session_start.ps1      # Windows SessionStart auto-exemption hook (timed / permanent)
-│   ├── session_start.sh       # macOS / Linux SessionStart auto-exemption hook
-│   ├── unlock.ps1             # Windows pass issuer & global policy CLI / interactive wizard
-│   └── unlock.sh              # macOS / Linux pass issuer & global policy CLI
+│   ├── grant_store.ps1          # Windows user-scoped grant store, canonical path & locking helpers
+│   ├── grant_store.py           # Cross-platform Python user-scoped grant store & policy helpers
+│   ├── guard.ps1                # Windows PowerShell PreToolUse firewall + Anti-Tamper Guard
+│   ├── guard.py                 # Cross-platform Python PreToolUse firewall + Anti-Tamper Guard
+│   ├── guard.sh                 # Unix Bash wrapper for guard.py with fail-closed fallback
+│   ├── session_start.ps1        # Windows SessionStart auto-exemption hook (timed / permanent)
+│   ├── session_start.py         # Cross-platform Python SessionStart auto-exemption hook
+│   ├── session_start.sh         # Unix Bash wrapper for session_start.py
+│   ├── unlock.ps1               # Windows pass issuer & global policy CLI / interactive wizard
+│   ├── unlock.py                # Cross-platform Python pass issuer & global policy CLI
+│   ├── unlock.sh                # Unix Bash wrapper for unlock.py
+│   ├── claude_settings.py       # Surgical non-destructive Claude Code settings.json hook merger
+│   └── python_runtime.sh        # Verified Python 3.9+ discovery helper (skips WindowsApps stubs)
 ├── tests/
-│   └── run_tests.py           # Cross-platform E2E security, SessionStart & installer test suite
-├── blindfold-control.cmd      # Windows one-click interactive exemption control launcher
-├── .gitattributes             # Enforces LF on .sh and CRLF on .ps1/.cmd across Git checkouts
-├── hooks.json                 # Native Antigravity SessionStart + PreToolUse hook manifest
-├── plugin.json                # Native Antigravity plugin manifest
-├── install.ps1                # Windows idempotent installer & uninstaller
-├── install.sh                 # macOS / Linux idempotent installer & uninstaller
-├── SECURITY.md                # Threat model & vulnerability reporting policy
-├── CHANGELOG.md               # Release history
-├── README.md                  # English documentation
-├── README_zh.md               # Simplified Chinese documentation
-└── LICENSE                    # MIT License
+│   ├── run_tests.py             # Cross-platform E2E security, SessionStart & installer test suite
+│   └── test_local_grants.py     # User-scoped grant store, fail-closed & host integration tests
+├── blindfold-control.cmd        # Windows one-click interactive exemption control launcher
+├── .gitattributes               # Enforces LF on .sh/.py and CRLF on .ps1/.cmd across checkouts
+├── hooks.json                   # Native Antigravity SessionStart + PreToolUse hook manifest
+├── plugin.json                  # Native Antigravity plugin manifest
+├── install.ps1                  # Windows idempotent installer & uninstaller
+├── install.sh                   # macOS / Linux idempotent installer & uninstaller
+├── SECURITY.md                  # Threat model & vulnerability reporting policy
+├── CHANGELOG.md                 # Release history
+├── CHANGELOG_zh.md              # Simplified Chinese release history
+├── README.md                    # English documentation
+├── README_zh.md                 # Simplified Chinese documentation
+└── LICENSE                      # MIT License
 ```
 
 ---

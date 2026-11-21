@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# One-click installer & uninstaller for agent-blindfold v1.1 (Heart-Under-Blade / 刃下心)
+# One-click installer & uninstaller for agent-blindfold v1.2 (Heart-Under-Blade / 刃下心)
 # Supports: Google Antigravity & Claude Code on macOS / Linux
 # Author: 琢玹 (zanex-dev) - https://github.com/zanex-dev
 # ==============================================================================
@@ -44,6 +44,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+case "$TARGET" in
+    all|antigravity|claude) ;;
+    *) echo "Invalid --target '$TARGET'." >&2; exit 1 ;;
+esac
+
 case "$AUTO_GRANT" in
     timed|permanent|off) ;;
     *)
@@ -60,20 +65,14 @@ CLAUDE_DIR="${HOME}/.claude"
 CLAUDE_HOOK_DIR="${CLAUDE_DIR}/hooks/agent-blindfold"
 CLAUDE_SETTINGS="${CLAUDE_DIR}/settings.json"
 
-PYTHON_BIN=""
-if command -v python3 >/dev/null 2>&1; then
-    PYTHON_BIN="python3"
-elif command -v python >/dev/null 2>&1; then
-    PYTHON_BIN="python"
-fi
-
-if [[ "$UNINSTALL" -eq 0 && -z "$PYTHON_BIN" ]]; then
-    echo "[ERROR] Python 3 ('python3' or 'python') is required by agent-blindfold Unix hooks." >&2
+source "$REPO_ROOT/scripts/python_runtime.sh"
+if ! blindfold_select_python; then
+    echo "[ERROR] A working Python 3.9+ interpreter is required by the Unix hooks." >&2
     exit 1
 fi
 
 echo "================================================================"
-echo "  agent-blindfold v1.1 | Codename: Heart-Under-Blade (刃下心)"
+echo "  agent-blindfold v1.2 | Codename: Heart-Under-Blade (刃下心)"
 if [[ "$UNINSTALL" -eq 1 ]]; then
     echo "  Mode: UNINSTALL"
 else
@@ -86,15 +85,7 @@ echo "================================================================"
 # ------------------------------------------------------------------------------
 if [[ "$UNINSTALL" -eq 0 ]]; then
     if [[ ! -f "$POLICY_FILE" || "$EXPLICIT_POLICY" -eq 1 ]]; then
-        mkdir -p "$GEMINI_CONFIG_DIR"
-        NOW_TS="$(date +%s)"
-        cat > "$POLICY_FILE" << EOF
-{
-  "sessionAutoGrant": "${AUTO_GRANT}",
-  "defaultTTL": "${DEFAULT_TTL}",
-  "updatedAt": ${NOW_TS}
-}
-EOF
+        "$PYTHON_BIN" -E -s -S -B "${REPO_ROOT}/scripts/unlock.py" --global-auto-grant "$AUTO_GRANT" --ttl "$DEFAULT_TTL"
         echo "[+] Configured SessionStart auto-exemption policy (${AUTO_GRANT} / ${DEFAULT_TTL}): ${POLICY_FILE}"
     else
         echo "[i] Preserved existing SessionStart policy: ${POLICY_FILE}"
@@ -123,6 +114,9 @@ if [[ "$TARGET" == "all" || "$TARGET" == "antigravity" ]]; then
         cp "${REPO_ROOT}/scripts/session_start.ps1" "${AGY_PLUGIN_DIR}/scripts/session_start.ps1"
         cp "${REPO_ROOT}/scripts/unlock.sh" "${AGY_PLUGIN_DIR}/scripts/unlock.sh"
         cp "${REPO_ROOT}/scripts/unlock.ps1" "${AGY_PLUGIN_DIR}/scripts/unlock.ps1"
+        for script in guard.py session_start.py unlock.py grant_store.py grant_store.ps1 python_runtime.sh; do
+            cp "${REPO_ROOT}/scripts/$script" "${AGY_PLUGIN_DIR}/scripts/$script"
+        done
         chmod +x "${AGY_PLUGIN_DIR}/scripts/guard.sh" "${AGY_PLUGIN_DIR}/scripts/session_start.sh" "${AGY_PLUGIN_DIR}/scripts/unlock.sh"
 
         cat > "${AGY_PLUGIN_DIR}/hooks.json" << 'EOF'
@@ -141,7 +135,7 @@ if [[ "$TARGET" == "all" || "$TARGET" == "antigravity" ]]; then
         "hooks": [
           {
             "type": "command",
-            "command": "./scripts/guard.sh",
+            "command": "./scripts/guard.sh antigravity",
             "timeout": 10
           }
         ]
@@ -159,42 +153,12 @@ fi
 # ------------------------------------------------------------------------------
 if [[ "$TARGET" == "all" || "$TARGET" == "claude" ]]; then
     if [[ "$UNINSTALL" -eq 1 ]]; then
+        if [[ -f "$CLAUDE_SETTINGS" && -n "$PYTHON_BIN" ]]; then
+            "$PYTHON_BIN" -E -s -S -B "${REPO_ROOT}/scripts/claude_settings.py" uninstall "$CLAUDE_SETTINGS" "${CLAUDE_HOOK_DIR}/guard.sh" "${CLAUDE_HOOK_DIR}/session_start.sh"
+        fi
         if [[ -d "$CLAUDE_HOOK_DIR" ]]; then
             rm -rf "$CLAUDE_HOOK_DIR"
             echo "[-] Removed Claude Code hook scripts: ${CLAUDE_HOOK_DIR}"
-        fi
-        if [[ -f "$CLAUDE_SETTINGS" && -n "$PYTHON_BIN" ]]; then
-            "$PYTHON_BIN" - "$CLAUDE_SETTINGS" << 'PYEOF'
-import json, sys
-path = sys.argv[1]
-try:
-    with open(path, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
-    hooks = cfg.get("hooks", {})
-    if isinstance(hooks, dict):
-        pre = hooks.get("PreToolUse")
-        if isinstance(pre, list):
-            hooks["PreToolUse"] = [
-                e for e in pre
-                if not any("agent-blindfold" in str(h.get("command", "")) for h in (e.get("hooks") or []))
-            ]
-        ses = hooks.get("SessionStart")
-        if isinstance(ses, list):
-            filtered_ses = [
-                e for e in ses
-                if not any("agent-blindfold" in str(h.get("command", "")) for h in (e.get("hooks") or []))
-            ]
-            if filtered_ses:
-                hooks["SessionStart"] = filtered_ses
-            else:
-                hooks.pop("SessionStart", None)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-        print(f"[-] Cleaned agent-blindfold entries from: {path}")
-except Exception as exc:
-    print(f"[!] Could not auto-clean {path}: {exc}")
-PYEOF
         fi
     else
         if [[ -d "$CLAUDE_DIR" || "$TARGET" == "claude" ]]; then
@@ -202,47 +166,13 @@ PYEOF
             cp "${REPO_ROOT}/scripts/guard.sh" "${CLAUDE_HOOK_DIR}/guard.sh"
             cp "${REPO_ROOT}/scripts/session_start.sh" "${CLAUDE_HOOK_DIR}/session_start.sh"
             cp "${REPO_ROOT}/scripts/unlock.sh" "${CLAUDE_HOOK_DIR}/unlock.sh"
+            for script in guard.py session_start.py unlock.py grant_store.py python_runtime.sh; do
+                cp "${REPO_ROOT}/scripts/$script" "${CLAUDE_HOOK_DIR}/$script"
+            done
             chmod +x "${CLAUDE_HOOK_DIR}/guard.sh" "${CLAUDE_HOOK_DIR}/session_start.sh" "${CLAUDE_HOOK_DIR}/unlock.sh"
 
             if [[ -n "$PYTHON_BIN" ]]; then
-                "$PYTHON_BIN" - "$CLAUDE_SETTINGS" "${CLAUDE_HOOK_DIR}/guard.sh" "${CLAUDE_HOOK_DIR}/session_start.sh" << 'PYEOF'
-import json, os, shutil, sys
-settings_path, guard_sh, session_sh = sys.argv[1], sys.argv[2], sys.argv[3]
-cfg = {}
-if os.path.isfile(settings_path):
-    shutil.copy2(settings_path, settings_path + ".bak")
-    with open(settings_path, "r", encoding="utf-8") as f:
-        raw = f.read().strip()
-        if raw:
-            cfg = json.loads(raw)
-
-hooks = cfg.setdefault("hooks", {})
-pre = hooks.setdefault("PreToolUse", [])
-pre = [
-    e for e in pre
-    if not any("agent-blindfold" in str(h.get("command", "")) for h in (e.get("hooks") or []))
-]
-pre.append({
-    "matcher": "Read|View|NotebookRead|Write|Edit|MultiEdit|NotebookEdit|Bash|mcp__.*",
-    "hooks": [{"type": "command", "command": f'"{guard_sh}"'}],
-})
-hooks["PreToolUse"] = pre
-
-ses = hooks.setdefault("SessionStart", [])
-ses = [
-    e for e in ses
-    if not any("agent-blindfold" in str(h.get("command", "")) for h in (e.get("hooks") or []))
-]
-ses.append({
-    "hooks": [{"type": "command", "command": f'"{session_sh}"'}],
-})
-hooks["SessionStart"] = ses
-
-with open(settings_path, "w", encoding="utf-8") as f:
-    json.dump(cfg, f, indent=2, ensure_ascii=False)
-    f.write("\n")
-print(f"[+] Merged SessionStart & PreToolUse hooks into Claude Code settings: {settings_path}")
-PYEOF
+                "$PYTHON_BIN" -E -s -S -B "${REPO_ROOT}/scripts/claude_settings.py" install "$CLAUDE_SETTINGS" "${CLAUDE_HOOK_DIR}/guard.sh" "${CLAUDE_HOOK_DIR}/session_start.sh"
             else
                 echo "[+] Copied Claude Code hooks to ${CLAUDE_HOOK_DIR} (install python3 to auto-merge settings.json)."
             fi
@@ -254,11 +184,14 @@ fi
 
 echo ""
 if [[ "$UNINSTALL" -eq 1 ]]; then
-    if [[ ! -d "$AGY_PLUGIN_DIR" && ! -d "$CLAUDE_HOOK_DIR" && -f "$POLICY_FILE" ]]; then
-        rm -f "$POLICY_FILE"
-        echo "[-] Removed global policy config: ${POLICY_FILE}"
+    if [[ ! -d "$AGY_PLUGIN_DIR" && ! -d "$CLAUDE_HOOK_DIR" ]]; then
+        "$PYTHON_BIN" -E -s -S -B "${REPO_ROOT}/scripts/grant_store.py" --clear-uninstalled-grants
+        if [[ -f "$POLICY_FILE" ]]; then
+            rm -f "$POLICY_FILE"
+            echo "[-] Removed global policy config: $POLICY_FILE"
+        fi
     fi
     echo "[OK] agent-blindfold has been cleanly uninstalled."
 else
-    echo "[OK] agent-blindfold v1.1 is active! Private vaults locked; engineering workspaces auto-exempted (${AUTO_GRANT})."
+    echo "[OK] agent-blindfold installed for target $TARGET. Check the effective policy with unlock.sh --status."
 fi

@@ -30,6 +30,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'grant_store.ps1')
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 $HardVaultDirs = @('pictures', 'videos', 'music', 'appdata')
@@ -39,23 +40,6 @@ function Get-EffectiveHomeDir {
     if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { return $env:USERPROFILE }
     if (-not [string]::IsNullOrWhiteSpace($env:HOME)) { return $env:HOME }
     return [Environment]::GetFolderPath('UserProfile')
-}
-
-function Convert-DurationToSeconds {
-    param([string]$Spec)
-    if ([string]::IsNullOrWhiteSpace($Spec)) { return $null }
-    $s = $Spec.Trim().ToLowerInvariant()
-    if ($s -match '^(\d+)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)?$') {
-        $val = [int64]$Matches[1]
-        $unit = if ($Matches[2]) { $Matches[2] } else { 's' }
-        switch -Regex ($unit) {
-            '^s' { return $val }
-            '^m' { return ($val * 60) }
-            '^h' { return ($val * 3600) }
-            '^d' { return ($val * 86400) }
-        }
-    }
-    return $null
 }
 
 function Resolve-RealPath {
@@ -92,7 +76,7 @@ function Resolve-RealPath {
                 $tailParts.Add((Split-Path -Leaf $probe))
                 $probe = $parent
             }
-            if (-not $resolvedHop) { return $current.TrimEnd('\', '/') }
+            if (-not $resolvedHop) { return $current }
         }
         return ""
     } catch {
@@ -113,7 +97,7 @@ function Test-ValidTargetWorkspace {
     param([string]$PathStr)
     if ([string]::IsNullOrWhiteSpace($PathStr)) { return $false }
     $full = Resolve-RealPath $PathStr
-    if ([string]::IsNullOrWhiteSpace($full) -or ($full -match '^[A-Za-z]:$')) { return $false }
+    if ([string]::IsNullOrWhiteSpace($full) -or ($full.TrimEnd('\','/') -eq [IO.Path]::GetPathRoot($full).TrimEnd('\','/'))) { return $false }
     $homeFull = Resolve-RealPath (Get-EffectiveHomeDir)
     if (Test-IsSubPath -TargetNorm $homeFull -WorkspaceNorm $full) { return $false }
     $geminiRoot = Join-Path $homeFull '.gemini'
@@ -149,79 +133,35 @@ function Test-ValidTargetWorkspace {
     return $true
 }
 
-function Ensure-GitLocalExclude {
-    param([string]$WsFull)
-    $excludeFile = Join-Path (Join-Path (Join-Path $WsFull '.git') 'info') 'exclude'
-    if (Test-Path -LiteralPath $excludeFile -PathType Leaf) {
-        try {
-            $existing = [System.IO.File]::ReadAllText($excludeFile, $utf8NoBom)
-            if ($existing -notmatch '(?m)^\s*\.allow_media\s*$') {
-                $prefix = if ($existing.Length -gt 0 -and -not $existing.EndsWith("`n")) { "`n" } else { "" }
-                [System.IO.File]::AppendAllText($excludeFile, "${prefix}.allow_media`n", $utf8NoBom)
-            }
-        } catch {}
-    }
-}
-
 function Set-GlobalPolicy {
     param([string]$GrantMode, [string]$DefaultTTLSpec)
     $cfgDir = Join-Path (Join-Path (Get-EffectiveHomeDir) '.gemini') 'config'
-    New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
+    if ($GrantMode -eq 'timed' -and (Convert-DurationToSeconds $DefaultTTLSpec) -le 0) { throw 'Invalid policy duration' }
     $polFile = Join-Path $cfgDir 'agent-blindfold.json'
     $polObj = [ordered]@{
         sessionAutoGrant = $GrantMode
         defaultTTL       = $DefaultTTLSpec
         updatedAt        = [int64][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     }
-    $jsonOut = ($polObj | ConvertTo-Json -Depth 4) + "`n"
-    [System.IO.File]::WriteAllText($polFile, $jsonOut, $utf8NoBom)
+    Write-StateJson $polFile $polObj
     Write-Host "[OK] Global SessionStart policy saved -> $polFile (sessionAutoGrant=$GrantMode, defaultTTL=$DefaultTTLSpec)" -ForegroundColor Green
 }
 
 function Show-Status {
     param([string]$WsFull)
-    $polFile = Join-Path (Join-Path (Join-Path (Get-EffectiveHomeDir) '.gemini') 'config') 'agent-blindfold.json'
-    $gMode = "timed (default)"
-    $gTTL  = "2h"
-    if (Test-Path -LiteralPath $polFile -PathType Leaf) {
-        try {
-            $p = [System.IO.File]::ReadAllText($polFile, $utf8NoBom) | ConvertFrom-Json
-            if ($p.sessionAutoGrant) { $gMode = $p.sessionAutoGrant }
-            if ($p.defaultTTL) { $gTTL = $p.defaultTTL }
-        } catch {}
-    }
-    Write-Host "Global SessionStart Auto-Grant : $gMode (Default TTL: $gTTL)" -ForegroundColor Cyan
-
-    if (-not [string]::IsNullOrWhiteSpace($WsFull) -and (Test-Path -LiteralPath $WsFull -PathType Container)) {
-        $marker = Join-Path $WsFull '.allow_media'
-        Write-Host "Target Workspace               : $WsFull" -ForegroundColor Cyan
-        if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) {
-            Write-Host "Workspace Pass Status          : LOCKED (no .allow_media)" -ForegroundColor Yellow
-            return
-        }
-        $raw = [System.IO.File]::ReadAllText($marker, $utf8NoBom).Trim()
-        $now = [int64][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-        if ($raw.StartsWith('{')) {
-            $tok = $raw | ConvertFrom-Json
-            if ($tok.mode -eq 'permanent') {
-                Write-Host "Workspace Pass Status          : UNLOCKED (PERMANENT)" -ForegroundColor Green
-                return
-            }
-            if ($tok.expires_at) {
-                $rem = [int64]$tok.expires_at - $now
-                if ($rem -gt 0) {
-                    $mins = [Math]::Round($rem / 60.0, 1)
-                    Write-Host "Workspace Pass Status          : UNLOCKED (TIMED, ${mins} min remaining)" -ForegroundColor Green
-                } else {
-                    Write-Host "Workspace Pass Status          : EXPIRED" -ForegroundColor Yellow
-                }
-                return
-            }
-        } elseif ($raw -match '^(?i)(permanent|forever)$') {
-            Write-Host "Workspace Pass Status          : UNLOCKED (PERMANENT)" -ForegroundColor Green
-            return
-        }
-        Write-Host "Workspace Pass Status          : PRESENT ($raw)" -ForegroundColor Green
+    $p = Get-GrantPolicy
+    Write-Host "Global SessionStart Auto-Grant : $($p.Mode) ($($p.ModeSource)); TTL: $($p.TTL) ($($p.TTLSource))"
+    if ($p.Error) { [Console]::Error.WriteLine($p.Error) }
+    Write-Host "Target Workspace               : $WsFull"
+    $wsReal = Resolve-RealPath $WsFull
+    if (-not $wsReal) { throw 'Cannot resolve workspace path' }
+    $token = Read-Grant (Get-GrantPath $wsReal)
+    if (-not $token) { Write-Host 'Workspace Pass Status          : LOCKED' }
+    elseif ($token.mode -eq 'permanent') { Write-Host 'Workspace Pass Status          : UNLOCKED (PERMANENT)' }
+    elseif ($token.expires_at -le [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) { Write-Host 'Workspace Pass Status          : EXPIRED' }
+    else { Write-Host "Workspace Pass Status          : UNLOCKED (TIMED, until $($token.expires_at) UTC epoch)" }
+    if (Test-Path -LiteralPath (Join-Path $WsFull '.allow_media')) {
+        Write-Host 'Legacy project marker ignored. Confirm via -Mode timed or permanent to grant locally.'
     }
 }
 
@@ -231,42 +171,15 @@ function Issue-WorkspacePass {
         Write-Error "Refused: '$WsFull' is a personal vault/container root, read-only chat folder, or does not exist. Choose a dedicated engineering project subfolder."
     }
     $WsFull = Resolve-RealPath $WsFull
-    $marker = Join-Path $WsFull '.allow_media'
-    $now = [int64][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-    if ($PassMode -eq 'permanent') {
-        $obj = [ordered]@{
-            version   = 1
-            mode      = "permanent"
-            issued_at = $now
-            issued_by = "cli_user"
-        }
-        $msg = "PERMANENT media exemption granted -> $marker"
-    } else {
-        $sec = Convert-DurationToSeconds $TTLSpec
-        if ($null -eq $sec -or $sec -le 0) {
-            Write-Error "Invalid TTL '$TTLSpec'. Use formats like 30m, 2h, 8h, 1d."
-        }
-        $obj = [ordered]@{
-            version     = 1
-            mode        = "timed"
-            ttl         = $TTLSpec.Trim().ToLowerInvariant()
-            ttl_seconds = $sec
-            issued_at   = $now
-            expires_at  = ($now + $sec)
-            issued_by   = "cli_user"
-        }
-        $msg = "TIMED media exemption ($TTLSpec) granted -> $marker"
-    }
-    $jsonOut = ($obj | ConvertTo-Json -Depth 4) + "`n"
-    [System.IO.File]::WriteAllText($marker, $jsonOut, $utf8NoBom)
-    Ensure-GitLocalExclude -WsFull $WsFull
-    Write-Host "[OK] $msg" -ForegroundColor Green
+    $token = Set-WorkspaceGrant $WsFull $PassMode $TTLSpec 'cli_user'
+    Write-Host "[OK] Local workspace grant: $($token.mode) -> $WsFull"
 }
 
 $targetWs = if (-not [string]::IsNullOrWhiteSpace($Workspace)) {
-    ([System.IO.Path]::GetFullPath($Workspace)).TrimEnd('\', '/')
+    if ($Workspace -match '^[A-Za-z]:($|[^\\/])') { throw 'Ambiguous drive-relative workspace selector' }
+    [System.IO.Path]::GetFullPath($Workspace)
 } else {
-    (Get-Location).Path.TrimEnd('\', '/')
+    (Get-Location).Path
 }
 
 if (-not [string]::IsNullOrWhiteSpace($GlobalAutoGrant)) {
@@ -282,13 +195,8 @@ if ($Status) {
 }
 
 if ($Lock) {
-    $marker = Join-Path $targetWs '.allow_media'
-    if (Test-Path -LiteralPath $marker -PathType Leaf) {
-        Remove-Item -LiteralPath $marker -Force
-        Write-Host "[OK] Workspace media re-locked (removed $marker)" -ForegroundColor Green
-    } else {
-        Write-Host "[i] Already locked ($targetWs)" -ForegroundColor DarkGray
-    }
+    Remove-WorkspaceGrant (Resolve-RealPath $targetWs)
+    Write-Host "[OK] Workspace locked: $targetWs"
     exit 0
 }
 
@@ -315,31 +223,26 @@ $choice = (Read-Host "Select action [1-5/Q]").Trim().ToUpperInvariant()
 switch ($choice) {
     "1" {
         $wsIn = (Read-Host "Workspace path [Enter for '$targetWs']").Trim()
-        if ($wsIn) { $targetWs = ([System.IO.Path]::GetFullPath($wsIn)).TrimEnd('\', '/') }
+        if ($wsIn) { $targetWs = [System.IO.Path]::GetFullPath($wsIn) }
         Issue-WorkspacePass -WsFull $targetWs -PassMode 'timed' -TTLSpec '2h'
     }
     "2" {
         $wsIn = (Read-Host "Workspace path [Enter for '$targetWs']").Trim()
-        if ($wsIn) { $targetWs = ([System.IO.Path]::GetFullPath($wsIn)).TrimEnd('\', '/') }
+        if ($wsIn) { $targetWs = [System.IO.Path]::GetFullPath($wsIn) }
         $customTtl = (Read-Host "Enter TTL (e.g. 30m, 2h, 8h, 1d) [default: 2h]").Trim()
         if (-not $customTtl) { $customTtl = "2h" }
         Issue-WorkspacePass -WsFull $targetWs -PassMode 'timed' -TTLSpec $customTtl
     }
     "3" {
         $wsIn = (Read-Host "Workspace path [Enter for '$targetWs']").Trim()
-        if ($wsIn) { $targetWs = ([System.IO.Path]::GetFullPath($wsIn)).TrimEnd('\', '/') }
+        if ($wsIn) { $targetWs = [System.IO.Path]::GetFullPath($wsIn) }
         Issue-WorkspacePass -WsFull $targetWs -PassMode 'permanent' -TTLSpec $TTL
     }
     "4" {
         $wsIn = (Read-Host "Workspace path [Enter for '$targetWs']").Trim()
-        if ($wsIn) { $targetWs = ([System.IO.Path]::GetFullPath($wsIn)).TrimEnd('\', '/') }
-        $marker = Join-Path $targetWs '.allow_media'
-        if (Test-Path -LiteralPath $marker -PathType Leaf) {
-            Remove-Item -LiteralPath $marker -Force
-            Write-Host "[OK] Workspace media re-locked ($marker)" -ForegroundColor Green
-        } else {
-            Write-Host "[i] No .allow_media found in $targetWs" -ForegroundColor DarkGray
-        }
+        if ($wsIn) { $targetWs = [System.IO.Path]::GetFullPath($wsIn) }
+        Remove-WorkspaceGrant (Resolve-RealPath $targetWs)
+        Write-Host "[OK] Workspace locked: $targetWs"
     }
     "5" {
         $gChoice = (Read-Host "Global SessionStart mode (timed / permanent / off) [default: timed]").Trim().ToLowerInvariant()

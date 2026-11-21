@@ -32,9 +32,12 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           chmod +x ./scripts/guard.sh ./scripts/session_start.sh ./scripts/unlock.sh ./install.sh
-          for f in ./scripts/guard.sh ./scripts/session_start.sh ./scripts/unlock.sh ./install.sh; do
+          for f in ./scripts/guard.sh ./scripts/session_start.sh ./scripts/unlock.sh ./scripts/python_runtime.sh ./install.sh; do
             file "$f" | grep -v "CRLF"
           done
 
       - name: Run Cross-Platform Security & Installer Test Suite
         run: python tests/run_tests.py
+
+      - name: Run grant storage and host integration regressions
+        run: python -m unittest discover -s tests -p test_local_grants.py -v

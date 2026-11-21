@@ -13,7 +13,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./scripts/guard.ps1",
+            "command": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./scripts/guard.ps1 -HookHost antigravity",
             "timeout": 10
           }
         ]

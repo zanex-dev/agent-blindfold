@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    One-click installer & uninstaller for agent-blindfold v1.1 (Codename: Heart-Under-Blade)
+    One-click installer & uninstaller for agent-blindfold v1.2 (Codename: Heart-Under-Blade)
     Supports Google Antigravity (Plugin + SessionStart/PreToolUse Hooks + Rule) and Claude Code (Lossless settings.json merge).
 .AUTHOR
     zanex-dev - https://github.com/zanex-dev
@@ -25,8 +25,11 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $HomeRoot = if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { $env:USERPROFILE } elseif (-not [string]::IsNullOrWhiteSpace($env:HOME)) { $env:HOME } else { [Environment]::GetFolderPath('UserProfile') }
 
+function Get-EffectiveHomeDir { return $HomeRoot }
+. (Join-Path $RepoRoot 'scripts/grant_store.ps1')
+
 Write-Host "================================================================" -ForegroundColor Cyan
-Write-Host "  agent-blindfold v1.1 | Codename: Heart-Under-Blade" -ForegroundColor Cyan
+Write-Host "  agent-blindfold v1.2 | Codename: Heart-Under-Blade" -ForegroundColor Cyan
 if ($Uninstall) {
     Write-Host "  Mode: UNINSTALL" -ForegroundColor Yellow
 } else {
@@ -52,8 +55,8 @@ if (-not $Uninstall) {
             defaultTTL       = $DefaultTTL
             updatedAt        = [int64][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
         }
-        $polJson = ($polObj | ConvertTo-Json -Depth 4) + "`n"
-        [System.IO.File]::WriteAllText($policyFile, $polJson, $utf8NoBom)
+        if ($AutoGrant -eq 'timed' -and (Convert-DurationToSeconds $DefaultTTL) -le 0) { throw 'Invalid time-to-live' }
+        Write-StateJson $policyFile $polObj
         Write-Host "[+] Configured SessionStart auto-exemption policy ($AutoGrant / $DefaultTTL): $policyFile" -ForegroundColor Green
     } else {
         Write-Host "[i] Preserved existing SessionStart policy: $policyFile" -ForegroundColor DarkGray
@@ -87,6 +90,9 @@ if ($Target -eq "all" -or $Target -eq "antigravity") {
         Copy-Item -LiteralPath (Join-Path $RepoRoot "scripts\unlock.ps1")        -Destination (Join-Path $agyPluginDir "scripts\unlock.ps1")        -Force
         Copy-Item -LiteralPath (Join-Path $RepoRoot "scripts\unlock.sh")         -Destination (Join-Path $agyPluginDir "scripts\unlock.sh")         -Force
 
+        foreach ($file in @('grant_store.ps1','grant_store.py','guard.py','session_start.py','unlock.py','python_runtime.sh')) {
+            Copy-Item -LiteralPath (Join-Path $RepoRoot "scripts/$file") -Destination (Join-Path $agyPluginDir "scripts/$file") -Force
+        }
         Write-Host "[+] Installed Antigravity Global Plugin (SessionStart + PreToolUse + Rule): $agyPluginDir" -ForegroundColor Green
     }
 }
@@ -95,20 +101,18 @@ if ($Target -eq "all" -or $Target -eq "antigravity") {
 # 2. Claude Code (~/.claude/settings.json + ~/.claude/hooks/agent-blindfold)
 # ------------------------------------------------------------------------------
 function Remove-BlindfoldEntries {
-    param([object[]]$Entries)
+    param([object[]]$Entries, [string[]]$Owned)
     $out = @()
-    if ($null -eq $Entries) { return ,$out }
     foreach ($entry in $Entries) {
-        if ($null -eq $entry) { continue }
-        $isBlindfold = $false
-        if ($null -ne $entry.PSObject.Properties['hooks']) {
-            foreach ($h in $entry.hooks) {
-                if ($null -ne $h.PSObject.Properties['command'] -and $h.command -match 'agent-blindfold') {
-                    $isBlindfold = $true
-                }
-            }
+        if (-not $entry -or -not $entry.PSObject.Properties['hooks'] -or @($entry.hooks).Count -eq 0) {
+            $out += $entry
+            continue
         }
-        if (-not $isBlindfold) { $out += $entry }
+        $kept = @($entry.hooks | Where-Object { $_.type -ne 'command' -or $_.command -cnotin $Owned })
+        if ($kept.Count -gt 0) {
+            $entry.hooks = $kept
+            $out += $entry
+        }
     }
     return ,$out
 }
@@ -118,35 +122,39 @@ if ($Target -eq "all" -or $Target -eq "claude") {
     $claudeGuardDir = Join-Path $claudeDir "hooks\agent-blindfold"
     $claudeSettings = Join-Path $claudeDir "settings.json"
 
+    $guardNorm = ((Join-Path $claudeGuardDir 'guard.ps1') -replace '\\','/') -replace "'", "''"
+    $sessionNorm = ((Join-Path $claudeGuardDir 'session_start.ps1') -replace '\\','/') -replace "'", "''"
+    $oldGuardCmd = "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command . '$guardNorm'"
+    $hookCmd = "$oldGuardCmd -HookHost claude"
+    $sessionCmd = "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command . '$sessionNorm'"
     if ($Uninstall) {
-        if (Test-Path -LiteralPath $claudeGuardDir) {
-            Remove-Item -LiteralPath $claudeGuardDir -Recurse -Force
-            Write-Host "[-] Removed Claude Code hook scripts: $claudeGuardDir" -ForegroundColor Green
-        }
         if (Test-Path -LiteralPath $claudeSettings) {
             try {
                 $rawJson = [System.IO.File]::ReadAllText($claudeSettings, $utf8NoBom)
                 $cfg = $rawJson | ConvertFrom-Json
                 if ($null -ne $cfg.PSObject.Properties['hooks']) {
                     if ($null -ne $cfg.hooks.PSObject.Properties['PreToolUse']) {
-                        $filteredPre = Remove-BlindfoldEntries -Entries @($cfg.hooks.PreToolUse)
+                        $filteredPre = Remove-BlindfoldEntries -Entries @($cfg.hooks.PreToolUse) -Owned @($oldGuardCmd,$hookCmd)
                         $cfg.hooks.PreToolUse = @($filteredPre)
                     }
                     if ($null -ne $cfg.hooks.PSObject.Properties['SessionStart']) {
-                        $filteredSes = Remove-BlindfoldEntries -Entries @($cfg.hooks.SessionStart)
+                        $filteredSes = Remove-BlindfoldEntries -Entries @($cfg.hooks.SessionStart) -Owned @($sessionCmd)
                         if ($filteredSes.Count -eq 0) {
                             $cfg.hooks.PSObject.Properties.Remove('SessionStart')
                         } else {
                             $cfg.hooks.SessionStart = @($filteredSes)
                         }
                     }
-                    $updatedJson = ($cfg | ConvertTo-Json -Depth 10) + "`n"
-                    [System.IO.File]::WriteAllText($claudeSettings, $updatedJson, $utf8NoBom)
+                    Write-StateJson $claudeSettings $cfg
                     Write-Host "[-] Cleaned agent-blindfold entries from: $claudeSettings" -ForegroundColor Green
                 }
             } catch {
-                Write-Host "[!] Could not auto-clean ${claudeSettings}: $_" -ForegroundColor Yellow
+                throw "Could not clean Claude settings. Hook scripts retained. $_"
             }
+        }
+        if (Test-Path -LiteralPath $claudeGuardDir) {
+            Remove-Item -LiteralPath $claudeGuardDir -Recurse -Force
+            Write-Host "[-] Removed Claude Code hook scripts: $claudeGuardDir" -ForegroundColor Green
         }
     } else {
         if ((Test-Path -LiteralPath $claudeDir) -or ($Target -eq "claude")) {
@@ -159,11 +167,7 @@ if ($Target -eq "all" -or $Target -eq "claude") {
             Copy-Item -LiteralPath (Join-Path $RepoRoot "scripts\session_start.ps1") -Destination $installedSessionPs1 -Force
             Copy-Item -LiteralPath (Join-Path $RepoRoot "scripts\unlock.ps1")        -Destination $installedUnlockPs1  -Force
 
-            $normGuardPs1   = ($installedGuardPs1   -replace '\\', '/') -replace "'", "''"
-            $normSessionPs1 = ($installedSessionPs1 -replace '\\', '/') -replace "'", "''"
-            # Use dot-sourcing with single quotes (no double quotes or '&') so Windows 'cmd /c' CreateProcess never injects '\"'
-            $hookCmd    = "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command . '$normGuardPs1'"
-            $sessionCmd = "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command . '$normSessionPs1'"
+            Copy-Item -LiteralPath (Join-Path $RepoRoot 'scripts/grant_store.ps1') -Destination (Join-Path $claudeGuardDir 'grant_store.ps1') -Force
 
             $cfg = New-Object PSObject
             if (Test-Path -LiteralPath $claudeSettings) {
@@ -184,7 +188,7 @@ if ($Target -eq "all" -or $Target -eq "claude") {
                 $cfg.hooks | Add-Member -MemberType NoteProperty -Name 'SessionStart' -Value @()
             }
 
-            $retainedPre = Remove-BlindfoldEntries -Entries @($cfg.hooks.PreToolUse)
+            $retainedPre = Remove-BlindfoldEntries -Entries @($cfg.hooks.PreToolUse) -Owned @($oldGuardCmd,$hookCmd)
             $newPreEntry = [ordered]@{
                 matcher = "Read|View|NotebookRead|Write|Edit|MultiEdit|NotebookEdit|Bash|mcp__.*"
                 hooks   = @(
@@ -197,7 +201,7 @@ if ($Target -eq "all" -or $Target -eq "claude") {
             $retainedPre += ([PSCustomObject]$newPreEntry)
             $cfg.hooks.PreToolUse = @($retainedPre)
 
-            $retainedSes = Remove-BlindfoldEntries -Entries @($cfg.hooks.SessionStart)
+            $retainedSes = Remove-BlindfoldEntries -Entries @($cfg.hooks.SessionStart) -Owned @($sessionCmd)
             $newSesEntry = [ordered]@{
                 hooks = @(
                     [ordered]@{
@@ -209,8 +213,7 @@ if ($Target -eq "all" -or $Target -eq "claude") {
             $retainedSes += ([PSCustomObject]$newSesEntry)
             $cfg.hooks.SessionStart = @($retainedSes)
 
-            $outJson = ($cfg | ConvertTo-Json -Depth 10) + "`n"
-            [System.IO.File]::WriteAllText($claudeSettings, $outJson, $utf8NoBom)
+            Write-StateJson $claudeSettings $cfg
             Write-Host "[+] Merged SessionStart & PreToolUse hooks into Claude Code settings: $claudeSettings" -ForegroundColor Green
         } else {
             Write-Host "[i] ~/.claude not detected; skipped Claude Code setup (pass '-Target claude' to force)." -ForegroundColor DarkGray
@@ -220,11 +223,15 @@ if ($Target -eq "all" -or $Target -eq "claude") {
 
 Write-Host ""
 if ($Uninstall) {
-    if ((-not (Test-Path -LiteralPath $agyPluginDir)) -and (-not (Test-Path -LiteralPath $claudeGuardDir)) -and (Test-Path -LiteralPath $policyFile)) {
-        Remove-Item -LiteralPath $policyFile -Force
-        Write-Host "[-] Removed global policy config: $policyFile" -ForegroundColor Green
+    if ((-not (Test-Path -LiteralPath $agyPluginDir)) -and (-not (Test-Path -LiteralPath $claudeGuardDir))) {
+        Remove-UninstalledGrants
+        if (Test-Path -LiteralPath $policyFile) {
+            Assert-StatePath $policyFile
+            Remove-Item -LiteralPath $policyFile -Force
+            Write-Host "[-] Removed global policy config: $policyFile" -ForegroundColor Green
+        }
     }
     Write-Host "[OK] agent-blindfold has been cleanly uninstalled." -ForegroundColor Green
 } else {
-    Write-Host "[OK] agent-blindfold v1.1 is active! Private vaults locked; engineering workspaces auto-exempted ($AutoGrant)." -ForegroundColor Green
+    Write-Host "[OK] agent-blindfold installed for the selected target ($Target). Check the effective policy with unlock.ps1 -Status." -ForegroundColor Green
 }

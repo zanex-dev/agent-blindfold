@@ -10,7 +10,20 @@
     MIT License - Copyright (c) 2026 zanex
 #>
 
+param([ValidateSet('auto','claude','antigravity')][string]$HookHost = 'auto')
 $ErrorActionPreference = 'Stop'
+trap {
+    [Console]::Error.WriteLine('agent-blindfold: unable to validate this tool call.')
+    if ($HookHost -eq 'claude' -or $isClaude) {
+        $errorJson = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"agent-blindfold could not validate this tool call."}}'
+    } else {
+        $errorJson = '{"decision":"deny","reason":"agent-blindfold could not validate this tool call."}'
+    }
+    $bytes = [Text.Encoding]::UTF8.GetBytes($errorJson + [Environment]::NewLine)
+    [Console]::OpenStandardOutput().Write($bytes,0,$bytes.Length)
+    exit 0
+}
+. (Join-Path $PSScriptRoot 'grant_store.ps1')
 
 # Force UTF-8 without BOM for stdin/stdout to guarantee clean JSON without encoding corruption or extra escaping
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -41,14 +54,14 @@ $ReadOnlyToolNames = @(
 $EnPersonal  = "Blocked by agent-blindfold (Heart-Under-Blade): Access to personal or external media files is strictly forbidden."
 $ZhPersonal  = $utf8NoBom.GetString([Convert]::FromBase64String("6Kem5Y+R5YWo5bGA5aqS5L2T6ZqQ56eB6ZqU56a76ZOB5b6L77ya5Lil56aB6K+75Y+W5oiW6Kem56Kw5Liq5Lq655uu5b2V5Y+K5aSW6YOo55uu5b2V55qE5Zu+54mH5LiO6Z+z6KeG6aKR5paH5Lu244CC"))
 
-$EnWorkspace = "Blocked by agent-blindfold (Heart-Under-Blade): Workspace media is isolated by default. Ask the user to grant a timed or permanent '.allow_media' pass via the unlock script (Agents must never create it themselves)."
-$ZhWorkspace = $utf8NoBom.GetString([Convert]::FromBase64String("6Kem5Y+R5YWo5bGA5aqS5L2T6ZqQ56eB6ZqU56a76ZOB5b6L77ya5bel5L2c5Yy65YaF5aqS5L2T5paH5Lu26buY6K6k6ZqU56a75oum5oiq77yI5aaC6ZyA5pS+6KGM77yM6K+35o+Q56S655So5oi35Zyo5pys5Zyw6L+Q6KGMIHVubG9jayDohJrmnKzkuIvlj5HpmZDml7bmiJbmsLjkuYUgLmFsbG93X21lZGlhIOmAmuihjOivge+8jOS4peemgSBBZ2VudCDoh6rooYzliJvlu7rvvInjgII="))
+$EnWorkspace = "Blocked by agent-blindfold: Workspace media has no valid local grant. Ask the user to issue one via the unlock controller."
+$ZhWorkspace = $utf8NoBom.GetString([Convert]::FromBase64String("5bel5L2c5Yy65aqS5L2T57y65bCR5pyJ5pWI55qE5pys5py65o6I5p2D44CC5aaC5pyJ6ZyA6KaB77yM6K+355So5oi36YCa6L+H5pys5py65o6n5Yi25Zmo562+5Y+R44CC"))
 
-$EnExpired   = "Blocked by agent-blindfold (Heart-Under-Blade): Workspace '.allow_media' timed pass has expired and was automatically cleaned up. Ask the user to renew it if still needed."
-$ZhExpired   = $utf8NoBom.GetString([Convert]::FromBase64String("6Kem5Y+R5YWo5bGA5aqS5L2T6ZqQ56eB6ZqU56a76ZOB5b6L77ya5b2T5YmN5bel5L2c5Yy655qEIC5hbGxvd19tZWRpYSDpmZDml7bosYHlhY3pgJrooYzor4Hlt7LliLDmnJ/lpLHmlYjlubboh6rliqjlm57mlLbvvIjlpoLku43pnIDor7vlj5bvvIzor7fmj5DnpLrnlKjmiLfph43mlrDkuIvlj5HvvInjgII="))
+$EnExpired = "Blocked by agent-blindfold: The local workspace grant has expired. Ask the user to renew it if needed."
+$ZhExpired = $utf8NoBom.GetString([Convert]::FromBase64String("5bel5L2c5Yy655qE5pys5py65o6I5p2D5bey5Yiw5pyf44CC5aaC5pyJ6ZyA6KaB77yM6K+355So5oi36YeN5paw562+5Y+R44CC"))
 
-$EnTamper    = "Blocked by agent-blindfold (Heart-Under-Blade): AI Agents are strictly forbidden from creating, modifying, or forging '.allow_media' passes or firewall policy files."
-$ZhTamper    = $utf8NoBom.GetString([Convert]::FromBase64String("6Kem5Y+R5YWo5bGA5aqS5L2T6ZqQ56eB6ZqU56a76ZOB5b6L77ya5Lil56aBIEFJIOaZuuiDveS9k+iHquihjOWIm+W7uuOAgeS/ruaUueaIluS8qumAoCAuYWxsb3dfbWVkaWEg6LGB5YWN6YCa6KGM6K+B5Y+K6Ziy54Gr5aKZ562W55Wl6YWN572u44CC"))
+$EnTamper = "Blocked by agent-blindfold: Agents are forbidden from modifying or forging local grants and privacy controls."
+$ZhTamper = $utf8NoBom.GetString([Convert]::FromBase64String("56aB5q2i5pm66IO95L2T6Ieq6KGM5L+u5pS55oiW5Lyq6YCg5pys5py65o6I5p2D5Y+K6ZqQ56eB562W55Wl44CC"))
 
 $langMode = if ($env:AGENT_BLINDFOLD_LANG) { $env:AGENT_BLINDFOLD_LANG.Trim().ToLowerInvariant() } else { "bilingual" }
 switch ($langMode) {
@@ -80,23 +93,6 @@ function Get-EffectiveHomeDir {
 
 function Get-NowUnixSeconds {
     return [int64][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-}
-
-function Convert-DurationToSeconds {
-    param([string]$Spec)
-    if ([string]::IsNullOrWhiteSpace($Spec)) { return $null }
-    $s = $Spec.Trim().ToLowerInvariant()
-    if ($s -match '^(\d+)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)?$') {
-        $val = [int64]$Matches[1]
-        $unit = if ($Matches[2]) { $Matches[2] } else { 's' }
-        switch -Regex ($unit) {
-            '^s' { return $val }
-            '^m' { return ($val * 60) }
-            '^h' { return ($val * 3600) }
-            '^d' { return ($val * 86400) }
-        }
-    }
-    return $null
 }
 
 function Emit-Response {
@@ -216,7 +212,16 @@ function Unwrap-CliOptionValue {
     return $cur
 }
 
-function Normalize-LocalPath {
+$script:PathCache = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
+function Normalize-LocalPath([string]$RawPath,[string]$BaseDir = '') {
+    $key = $BaseDir + [char]0 + $RawPath
+    if (-not $script:PathCache.ContainsKey($key)) {
+        $script:PathCache[$key] = Resolve-ToolPath -RawPath $RawPath -BaseDir $BaseDir
+    }
+    return $script:PathCache[$key]
+}
+
+function Resolve-ToolPath {
     param(
         [string]$RawPath,
         [string]$BaseDir = ""
@@ -359,6 +364,7 @@ function Test-IsSubPath {
 function Test-IsValidProjectWorkspace {
     param([string]$WsPath)
     if ([string]::IsNullOrWhiteSpace($WsPath)) { return $false }
+    if ($WsPath -match '^[A-Za-z]:($|[^\\/])') { return $false }
     $normWs = (Normalize-LocalPath $WsPath).TrimEnd('\', '/')
     if ([string]::IsNullOrWhiteSpace($normWs)) { return $false }
 
@@ -400,18 +406,10 @@ function Test-IsProtectedControlTarget {
     if ($ProtectedControlLeaves -contains $leaf) { return $true }
 
     # Protect installed plugin/hook directories and host hook configuration manifests from self-tampering
-    $homeNorm = (Normalize-LocalPath (Get-EffectiveHomeDir)).TrimEnd('\', '/')
-    $agyPluginInstalled = Join-Path (Join-Path (Join-Path $homeNorm '.gemini') 'config') 'plugins\agent-blindfold'
-    $agyGlobalHooks     = Join-Path (Join-Path (Join-Path $homeNorm '.gemini') 'config') 'hooks.json'
-    $claudeHookInstalled = Join-Path (Join-Path $homeNorm '.claude') 'hooks\agent-blindfold'
-    $claudeSettingsFile  = Join-Path (Join-Path $homeNorm '.claude') 'settings.json'
-    $claudeLocalSettings = Join-Path (Join-Path $homeNorm '.claude') 'settings.local.json'
-
-    if (Test-IsSubPath -TargetNorm $norm -WorkspaceNorm $agyPluginInstalled) { return $true }
-    if (Test-IsSubPath -TargetNorm $norm -WorkspaceNorm $claudeHookInstalled) { return $true }
-    if ($norm.ToLowerInvariant() -in @($agyGlobalHooks.ToLowerInvariant(), $claudeSettingsFile.ToLowerInvariant(), $claudeLocalSettings.ToLowerInvariant())) {
-        return $true
+    foreach ($root in $script:ProtectedRoots) {
+        if (Test-IsSubPath -TargetNorm $norm -WorkspaceNorm $root) { return $true }
     }
+    if ($norm -in $script:ProtectedFiles) { return $true }
     if ($leaf -eq 'hooks.json') {
         $parentLeaf = (Get-SafeFileName (Split-SafeParent $norm)).ToLowerInvariant()
         if ($parentLeaf -eq '.agents') { return $true }
@@ -510,94 +508,6 @@ function Test-IsAutoExemptEngineeringSandbox {
     return $false
 }
 
-function Evaluate-AllowMediaPass {
-    <#
-    Evaluates <workspace>/.allow_media pass v2:
-      Returns: 'valid' | 'expired' | 'missing'
-      Supports:
-        - JSON: {"mode":"permanent"} or {"mode":"timed","expires_at":1794350000}
-        - Plain text: "permanent" / "forever" or duration like "30m" / "2h" / "1d" (relative to file mtime)
-        - Empty file (legacy compatible): defaults to AGENT_BLINDFOLD_EMPTY_TTL (default "2h", or "permanent")
-    #>
-    param([string]$MarkerPath)
-    if (-not (Test-Path -LiteralPath $MarkerPath -PathType Leaf)) {
-        return 'missing'
-    }
-
-    $nowSec = Get-NowUnixSeconds
-    try {
-        $item = Get-Item -LiteralPath $MarkerPath -Force
-        $mtimeSec = [int64]([DateTimeOffset]$item.LastWriteTimeUtc).ToUnixTimeSeconds()
-        $rawContent = [System.IO.File]::ReadAllText($MarkerPath, $utf8NoBom).Trim()
-    } catch {
-        return 'missing'
-    }
-
-    # 1. Empty file -> legacy compatibility with safe automatic expiry
-    if ([string]::IsNullOrEmpty($rawContent)) {
-        $emptySpec = if ($env:AGENT_BLINDFOLD_EMPTY_TTL) { $env:AGENT_BLINDFOLD_EMPTY_TTL.Trim().ToLowerInvariant() } else { '2h' }
-        if ($emptySpec -eq 'permanent' -or $emptySpec -eq 'forever' -or $emptySpec -eq '0') {
-            return 'valid'
-        }
-        $ttlSec = Convert-DurationToSeconds $emptySpec
-        if ($null -eq $ttlSec) { $ttlSec = 7200 }
-        if ($nowSec -le ($mtimeSec + $ttlSec)) {
-            return 'valid'
-        }
-        Remove-Item -LiteralPath $MarkerPath -Force -ErrorAction SilentlyContinue
-        return 'expired'
-    }
-
-    # 2. Structured JSON token
-    if ($rawContent.StartsWith('{')) {
-        try {
-            $tok = $rawContent | ConvertFrom-Json
-            $mode = if ($null -ne $tok.PSObject.Properties['mode'] -and $tok.mode) { ([string]$tok.mode).Trim().ToLowerInvariant() } else { '' }
-            if ($mode -eq 'permanent' -or $mode -eq 'forever') {
-                return 'valid'
-            }
-            if ($null -ne $tok.PSObject.Properties['expires_at'] -and $null -ne $tok.expires_at) {
-                $exp = [int64]$tok.expires_at
-                if ($exp -gt 100000000000) { $exp = [int64][Math]::Floor($exp / 1000) }
-                if ($nowSec -le $exp) {
-                    return 'valid'
-                }
-                Remove-Item -LiteralPath $MarkerPath -Force -ErrorAction SilentlyContinue
-                return 'expired'
-            }
-            if ($mode -eq 'timed' -and $null -ne $tok.PSObject.Properties['ttl_seconds'] -and $null -ne $tok.ttl_seconds) {
-                $ttl = [int64]$tok.ttl_seconds
-                $base = if ($null -ne $tok.PSObject.Properties['issued_at'] -and $null -ne $tok.issued_at) { [int64]$tok.issued_at } else { $mtimeSec }
-                if ($nowSec -le ($base + $ttl)) {
-                    return 'valid'
-                }
-                Remove-Item -LiteralPath $MarkerPath -Force -ErrorAction SilentlyContinue
-                return 'expired'
-            }
-        } catch {
-            return 'missing'
-        }
-        return 'missing'
-    }
-
-    # 3. Plain-text shorthand ("permanent" or duration "2h" / "30m" / "86400")
-    $lowerText = $rawContent.ToLowerInvariant()
-    if ($lowerText -eq 'permanent' -or $lowerText -eq 'forever') {
-        return 'valid'
-    }
-    $durSec = Convert-DurationToSeconds $lowerText
-    if ($null -ne $durSec) {
-        if ($durSec -gt 0 -and $nowSec -le ($mtimeSec + $durSec)) {
-            return 'valid'
-        }
-        Remove-Item -LiteralPath $MarkerPath -Force -ErrorAction SilentlyContinue
-        return 'expired'
-    }
-
-    # Unrecognized malformed content -> zero-trust fail-closed
-    return 'missing'
-}
-
 function Test-IsTier0DirectoryAnchor {
     param(
         [string]$NormDir,
@@ -628,7 +538,7 @@ function Test-IsUnlockedWorkspaceDir {
     if (Test-InHardVault $NormDir) { return $false }
     foreach ($ws in $ValidWorkspaces) {
         if (Test-IsSubPath -TargetNorm $NormDir -WorkspaceNorm $ws) {
-            if ((Evaluate-AllowMediaPass -MarkerPath (Join-SafePath $ws '.allow_media')) -eq 'valid') {
+            if ((Get-GrantState $ws) -eq 'valid') {
                 return $true
             }
         }
@@ -663,6 +573,7 @@ function Evaluate-MediaPath {
     if ([string]::IsNullOrWhiteSpace($normTarget)) { return $null }
 
     $ext = Get-SafeExtension $normTarget
+    if ($ext -ne '.svg' -and $ext -notin $MediaExtensions) { return $null }
     $inHardVault = Test-InHardVault $normTarget
     $inPersonalContainer = Test-InPersonalContainer $normTarget
 
@@ -704,8 +615,7 @@ function Evaluate-MediaPath {
     # Tier 3: Inside a valid dedicated project workspace -> check timed/permanent .allow_media pass
     $sawExpired = $false
     foreach ($ws in $matchedWs) {
-        $marker = Join-Path $ws '.allow_media'
-        $state = Evaluate-AllowMediaPass -MarkerPath $marker
+        $state = Get-GrantState $ws
         if ($state -eq 'valid') {
             return $null
         } elseif ($state -eq 'expired') {
@@ -719,31 +629,23 @@ function Evaluate-MediaPath {
     return $ReasonWorkspaceDefault
 }
 
-try {
-    $rawInput = [Console]::In.ReadToEnd()
-    if ([string]::IsNullOrWhiteSpace($rawInput)) {
-        Emit-Response -Decision 'allow'
-    }
-    $data = $rawInput | ConvertFrom-Json
-} catch {
-    Emit-Response -Decision 'allow'
+$profileRoot = (Normalize-LocalPath (Get-EffectiveHomeDir)).TrimEnd('\','/')
+$script:ProtectedRoots = @('.gemini/config/plugins/agent-blindfold','.gemini/config/agent-blindfold-grants','.claude/hooks/agent-blindfold') | ForEach-Object { Join-Path $profileRoot $_ }
+$script:ProtectedFiles = @('.gemini/config/hooks.json','.claude/settings.json','.claude/settings.local.json') | ForEach-Object { Join-Path $profileRoot $_ }
+$raw = [Console]::In.ReadToEnd()
+if (-not $raw.TrimStart().StartsWith('{')) { throw 'Invalid hook message' }
+$data = $raw | ConvertFrom-Json
+if ($null -eq $data -or $data.GetType().FullName -ne 'System.Management.Automation.PSCustomObject') { throw 'Invalid hook message' }
+$isClaude = $HookHost -eq 'claude' -or ($HookHost -eq 'auto' -and $null -ne $data.PSObject.Properties['tool_name'])
+if ($isClaude) {
+    $toolName = $data.tool_name
+    $argsObj = $data.tool_input
+} else {
+    $toolName = $data.toolCall.name
+    $argsObj = $data.toolCall.args
 }
-
-# Detect protocol: Google Antigravity vs Claude Code
-$isClaude = ($null -ne $data.PSObject.Properties['tool_name']) -and ($null -eq $data.PSObject.Properties['toolCall'])
-
-$toolName = ""
-$argsObj = $null
-if (-not $isClaude -and $null -ne $data.PSObject.Properties['toolCall'] -and $null -ne $data.toolCall) {
-    if ($null -ne $data.toolCall.PSObject.Properties['name']) { $toolName = [string]$data.toolCall.name }
-    if ($null -ne $data.toolCall.PSObject.Properties['args']) { $argsObj = $data.toolCall.args }
-} elseif ($isClaude) {
-    if ($null -ne $data.PSObject.Properties['tool_name']) { $toolName = [string]$data.tool_name }
-    if ($null -ne $data.PSObject.Properties['tool_input']) { $argsObj = $data.tool_input }
-}
-
-if ($null -eq $argsObj) {
-    Emit-Response -Decision 'allow' -IsClaudeCode $isClaude
+if ($toolName -isnot [string] -or [string]::IsNullOrWhiteSpace($toolName) -or $null -eq $argsObj -or $argsObj.GetType().FullName -ne 'System.Management.Automation.PSCustomObject') {
+    throw 'Missing tool call or arguments'
 }
 
 $conversationId = ""
@@ -804,12 +706,12 @@ if (-not [string]::IsNullOrWhiteSpace($cmdLine)) {
 
     # A0: Anti-Tamper Guard -- block Agent attempts to forge/modify .allow_media, policy JSON, installed hooks, or invoke unlock scripts
     if (-not $isPureGitRead) {
-        if ($cmdLine -match '(?i)(?:\.allow_media|agent-blindfold\.json|[\\/]\.gemini[\\/]config[\\/](?:plugins[\\/]agent-blindfold|hooks\.json)|[\\/]\.claude[\\/](?:hooks[\\/]agent-blindfold|settings(?:\.local)?\.json)|[\\/]\.agents[\\/]hooks\.json)') {
+        if ($cmdLine -match '(?i)(?:\.allow_media|agent-blindfold\.json|agent-blindfold-grants|[\\/]\.gemini[\\/]config[\\/](?:plugins[\\/]agent-blindfold|hooks\.json)|[\\/]\.claude[\\/](?:hooks[\\/]agent-blindfold|settings(?:\.local)?\.json)|[\\/]\.agents[\\/]hooks\.json)') {
             Emit-Response -Decision 'deny' -Reason $ReasonTamper -IsClaudeCode $isClaude
         }
     }
     if (-not $isSafeGitRepoOp) {
-        if ($cmdLine -match '(?i)(?:blindfold-control(?:\.cmd)?|(?:^|[\s"''`=/\\;|&(>])unlock(?:\.ps1|\.sh)?(?=$|[\s"''`/\\;|&)<]))') {
+        if ($cmdLine -match '(?i)(?:blindfold-control(?:\.cmd)?|(?:^|[\s"''`=/\\;|&(>])unlock(?:\.ps1|\.sh|\.py)?(?=$|[\s"''`/\\;|&)<]))') {
             Emit-Response -Decision 'deny' -Reason $ReasonTamper -IsClaudeCode $isClaude
         }
     }

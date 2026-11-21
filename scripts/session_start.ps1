@@ -12,6 +12,7 @@
 #>
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'grant_store.ps1')
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [Console]::InputEncoding  = $utf8NoBom
@@ -24,23 +25,6 @@ function Get-EffectiveHomeDir {
     if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { return $env:USERPROFILE }
     if (-not [string]::IsNullOrWhiteSpace($env:HOME)) { return $env:HOME }
     return [Environment]::GetFolderPath('UserProfile')
-}
-
-function Convert-DurationToSeconds {
-    param([string]$Spec)
-    if ([string]::IsNullOrWhiteSpace($Spec)) { return $null }
-    $s = $Spec.Trim().ToLowerInvariant()
-    if ($s -match '^(\d+)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)?$') {
-        $val = [int64]$Matches[1]
-        $unit = if ($Matches[2]) { $Matches[2] } else { 's' }
-        switch -Regex ($unit) {
-            '^s' { return $val }
-            '^m' { return ($val * 60) }
-            '^h' { return ($val * 3600) }
-            '^d' { return ($val * 86400) }
-        }
-    }
-    return $null
 }
 
 function Emit-SessionOutput {
@@ -145,6 +129,7 @@ function Test-IsSubPath {
 function Test-IsValidEngineeringWorkspace {
     param([string]$WsPath)
     if ([string]::IsNullOrWhiteSpace($WsPath)) { return $false }
+    if ($WsPath -match '^[A-Za-z]:($|[^\\/])') { return $false }
     $normWs = (Normalize-LocalPath $WsPath).TrimEnd('\', '/')
     if ([string]::IsNullOrWhiteSpace($normWs)) { return $false }
     if ($normWs -match '^[A-Za-z]:$') { return $false }
@@ -191,20 +176,6 @@ function Test-IsValidEngineeringWorkspace {
     return $true
 }
 
-function Ensure-GitLocalExclude {
-    param([string]$WorkspaceNorm)
-    $excludeFile = Join-Path (Join-Path (Join-Path $WorkspaceNorm '.git') 'info') 'exclude'
-    if (Test-Path -LiteralPath $excludeFile -PathType Leaf) {
-        try {
-            $existing = [System.IO.File]::ReadAllText($excludeFile, $utf8NoBom)
-            if ($existing -notmatch '(?m)^\s*\.allow_media\s*$') {
-                $prefix = if ($existing.Length -gt 0 -and -not $existing.EndsWith("`n")) { "`n" } else { "" }
-                [System.IO.File]::AppendAllText($excludeFile, "${prefix}.allow_media`n", $utf8NoBom)
-            }
-        } catch {}
-    }
-}
-
 try {
     $rawInput = [Console]::In.ReadToEnd()
     if ([string]::IsNullOrWhiteSpace($rawInput)) {
@@ -217,33 +188,11 @@ try {
 
 $isClaude = (($null -ne $data.PSObject.Properties['hook_event_name']) -or ($null -ne $data.PSObject.Properties['session_id'])) -and ($null -eq $data.PSObject.Properties['conversationId'])
 
-# Load global policy from ~/.gemini/config/agent-blindfold.json (with env overrides)
-$autoGrantMode = "timed"
-$defaultTTL = "2h"
-
-$policyPath = Join-Path (Join-Path (Join-Path (Get-EffectiveHomeDir) '.gemini') 'config') 'agent-blindfold.json'
-if (Test-Path -LiteralPath $policyPath -PathType Leaf) {
-    try {
-        $pol = [System.IO.File]::ReadAllText($policyPath, $utf8NoBom) | ConvertFrom-Json
-        if ($null -ne $pol.PSObject.Properties['sessionAutoGrant'] -and -not [string]::IsNullOrWhiteSpace([string]$pol.sessionAutoGrant)) {
-            $autoGrantMode = ([string]$pol.sessionAutoGrant).Trim().ToLowerInvariant()
-        }
-        if ($null -ne $pol.PSObject.Properties['defaultTTL'] -and -not [string]::IsNullOrWhiteSpace([string]$pol.defaultTTL)) {
-            $defaultTTL = ([string]$pol.defaultTTL).Trim().ToLowerInvariant()
-        }
-    } catch {}
-}
-
-if (-not [string]::IsNullOrWhiteSpace($env:AGENT_BLINDFOLD_AUTO_GRANT)) {
-    $autoGrantMode = $env:AGENT_BLINDFOLD_AUTO_GRANT.Trim().ToLowerInvariant()
-}
-if (-not [string]::IsNullOrWhiteSpace($env:AGENT_BLINDFOLD_DEFAULT_TTL)) {
-    $defaultTTL = $env:AGENT_BLINDFOLD_DEFAULT_TTL.Trim().ToLowerInvariant()
-}
-
-if ($autoGrantMode -in @('off', 'false', 'none', 'manual', 'sandbox_only')) {
-    Emit-SessionOutput -IsClaudeCode $isClaude
-}
+$policy = Get-GrantPolicy
+$autoGrantMode = $policy.Mode
+$defaultTTL = $policy.TTL
+if ($policy.Error) { [Console]::Error.WriteLine($policy.Error) }
+if ($autoGrantMode -eq 'off') { Emit-SessionOutput -IsClaudeCode $isClaude }
 
 $rawWorkspaces = New-Object System.Collections.Generic.List[string]
 if ($null -ne $data.PSObject.Properties['workspacePaths'] -and $null -ne $data.workspacePaths) {
@@ -266,66 +215,15 @@ foreach ($ws in $rawWorkspaces) {
     $normWs = (Normalize-LocalPath $ws).TrimEnd('\', '/')
     if ($grantedWorkspaces -contains $normWs) { continue }
 
-    $markerPath = Join-Path $normWs '.allow_media'
-
-    # Preserve an existing explicit permanent pass if already present in this workspace
-    $alreadyPermanent = $false
-    if (Test-Path -LiteralPath $markerPath -PathType Leaf) {
-        try {
-            $existingRaw = [System.IO.File]::ReadAllText($markerPath, $utf8NoBom).Trim()
-            if ($existingRaw -match '^(?i)(permanent|forever)$') {
-                $alreadyPermanent = $true
-            } elseif ($existingRaw.StartsWith('{')) {
-                $existingObj = $existingRaw | ConvertFrom-Json
-                if ($null -ne $existingObj.PSObject.Properties['mode'] -and ([string]$existingObj.mode).Trim().ToLowerInvariant() -in @('permanent', 'forever')) {
-                    $alreadyPermanent = $true
-                }
-            }
-        } catch {}
-    }
-
-    if ($alreadyPermanent) {
-        $effectiveSummaryMode = "permanent"
-        $grantedWorkspaces.Add($normWs)
-        continue
-    }
-
-    if ($autoGrantMode -in @('permanent', 'forever')) {
-        $tokenObj = [ordered]@{
-            version   = 1
-            mode      = "permanent"
-            issued_at = $nowSec
-            issued_by = "session_start"
-        }
-        $effectiveSummaryMode = "permanent"
-    } else {
-        $ttlSec = Convert-DurationToSeconds $defaultTTL
-        if ($null -eq $ttlSec -or $ttlSec -le 0) {
-            $ttlSec = 7200
-            $defaultTTL = "2h"
-        }
-        $tokenObj = [ordered]@{
-            version     = 1
-            mode        = "timed"
-            ttl         = $defaultTTL
-            ttl_seconds = $ttlSec
-            issued_at   = $nowSec
-            expires_at  = ($nowSec + $ttlSec)
-            issued_by   = "session_start"
-        }
-        $effectiveSummaryMode = "timed ($defaultTTL)"
-    }
-
     try {
-        $tokenJson = ($tokenObj | ConvertTo-Json -Depth 4) + "`n"
-        [System.IO.File]::WriteAllText($markerPath, $tokenJson, $utf8NoBom)
-        Ensure-GitLocalExclude -WorkspaceNorm $normWs
+        $token = Set-WorkspaceGrant $normWs $autoGrantMode $defaultTTL 'session_start'
+        $effectiveSummaryMode = $token.mode
         $grantedWorkspaces.Add($normWs)
-    } catch {}
+    } catch { [Console]::Error.WriteLine("agent-blindfold: unable to issue local grant: $_") }
 }
 
 if ($grantedWorkspaces.Count -gt 0) {
-    $notice = "[agent-blindfold] Engineering media exemption automatically granted at session start (mode: $effectiveSummaryMode). Reading, generating, and editing/processing media assets (including via PIL/cv2/ffmpeg/scripts), .svg files, current-session brain/<id> files, and Playwright/sandbox screenshots inside exempted scopes are permitted; personal directories, cross-session uploads, and modifying .allow_media remain strictly blocked."
+    $notice = "[agent-blindfold] Engineering media exemption automatically granted at session start (mode: $effectiveSummaryMode). Reading, generating, and editing/processing media assets (including via PIL/cv2/ffmpeg/scripts), .svg files, current-session brain/<id> files, and Playwright/sandbox screenshots inside exempted scopes are permitted; personal directories, cross-session uploads, and modifying local privacy controls remain strictly blocked."
     Emit-SessionOutput -IsClaudeCode $isClaude -SystemNotice $notice
 }
 

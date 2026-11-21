@@ -6,6 +6,32 @@ All notable changes to **`agent-blindfold`** will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-11-21 — User-Scoped Private Grant Store, Fail-Closed Hardening & Modular Python Runtime
+
+### Added & Changed
+- **User-Scoped Private Grant Store (`scripts/grant_store.ps1` & `scripts/grant_store.py`)**:
+  - Moved workspace pass storage out of project repositories into the current user's private directory (`~/.gemini/config/agent-blindfold-grants/`), keyed by canonical resolved workspace path with symlink/reparse verification, file locking, and atomic writes.
+  - Issuing, renewing, or revoking a grant never touches project files or `.git/info/exclude`—keeping Git working trees clean across regular repositories, linked Git worktrees, and submodules (gitfile layouts).
+  - Windows PowerShell and Python engines share identical canonical workspace identity (including Chinese characters and spaces in paths), and root or empty paths are strictly rejected as workspace targets.
+- **Modular Python 3.9+ Unix Engine & Verified Runtime Discovery (`scripts/guard.py`, `scripts/session_start.py`, `scripts/unlock.py`, `scripts/python_runtime.sh`)**:
+  - Refactored Unix hooks into modular Python 3.9+ scripts wrapped by lightweight Bash entrypoints (`guard.sh`, `session_start.sh`, `unlock.sh`).
+  - Probes active virtual environments, verified `PATH` executables (skipping empty `WindowsApps` stub aliases under Git Bash), and the Windows `py -3` launcher while ensuring hook bodies execute only once.
+- **Expanded Local Grant & Host Integration Test Suite (`tests/test_local_grants.py`)**:
+  - Added 28 integration and regression tests covering user-scoped grant storage, ignored legacy `.allow_media` files, gitfile worktrees, corrupted policies, host-specific fail-closed responses, surgical installer/uninstaller hook merging, and cross-engine interoperability.
+
+### Fixed & Hardened
+- **Legacy Repo-Bundled `.allow_media` Ignored & Fail-Closed Policy Handling (Migration Note)**:
+  - In-project `.allow_media` files are now ignored and left untouched so cloned third-party repositories can never ship pre-unlocked passes. Existing manual grants must be reissued via the local controller (`unlock.ps1` / `unlock.sh` / `blindfold-control.cmd`).
+  - Corrupt or invalid top-level JSON in `~/.gemini/config/agent-blindfold.json` pauses new automatic grant issuance with diagnostics instead of falling back to auto-grant.
+- **Explicit Host Protocol Binding & Fail-Closed Guard Responses (`hooks.json`, `scripts/guard.ps1`, `scripts/guard.sh`, `scripts/guard.py`)**:
+  - Installed entrypoints explicitly bind the target host (`-HookHost antigravity|claude` or `antigravity|claude`). Malformed/empty hook payloads or a missing Python 3.9+ interpreter now return a host-compatible `deny` decision and diagnostic message instead of silently passing through.
+- **Surgical Non-Destructive Claude Code Hook Merging (`scripts/claude_settings.py`, `install.ps1`, `install.sh`)**:
+  - Install, upgrade, and uninstall match only `agent-blindfold`-owned hook commands—preserving co-located third-party hooks, matchers, and ordering. Uninstall cleans host settings before removing scripts and only deletes local grants/policy after the final host target is removed.
+- **Unified Policy & Status Diagnostics (`scripts/unlock.ps1`, `scripts/unlock.py`)**:
+  - `-Status` / `--status` shares policy resolution with `SessionStart`, displaying effective values, TTL, environment override sources, and explicitly noting ignored legacy `.allow_media` files.
+- **Windows Batch-Read Performance Optimization (`scripts/guard.ps1`)**:
+  - Reuses canonical path resolution and fixed control directories within a single guard invocation (never persisted across calls), reducing median 100-file Markdown batch-read guard time on Windows from ~4.72s to ~1.10s.
+
 ## [1.1.2] - 2026-11-11 — Windows CLI Crash Fixes & Shell Option/Subcommand Hardening
 
 ### Fixed & Hardened

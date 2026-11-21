@@ -11,6 +11,7 @@ Tests:
   6. Pass controller CLI (scripts/unlock.ps1 & scripts/unlock.sh)
   7. Idempotent Installer & Uninstaller lossless settings.json merge in an isolated temp HOME
 """
+import hashlib
 import json
 import os
 import platform
@@ -35,6 +36,15 @@ UNLOCK_PS1 = os.path.join(REPO_ROOT, "scripts", "unlock.ps1")
 UNLOCK_SH = os.path.join(REPO_ROOT, "scripts", "unlock.sh")
 INSTALL_PS1 = os.path.join(REPO_ROOT, "install.ps1")
 INSTALL_SH = os.path.join(REPO_ROOT, "install.sh")
+
+
+def fixture_grant(fake_home, workspace):
+    key = os.path.realpath(os.path.abspath(workspace))
+    if os.name == "nt":
+        key = key.replace(chr(92), "/").lower()
+    root = os.path.join(fake_home, ".gemini", "config", "agent-blindfold-grants")
+    os.makedirs(root, exist_ok=True)
+    return os.path.join(root, hashlib.sha256(key.encode()).hexdigest() + ".json")
 
 
 def make_ps_hook_cmd(script_path):
@@ -131,7 +141,7 @@ def run_engine_suite(engine_name, cmd_list):
             os.makedirs(d, exist_ok=True)
 
         home_env = {"HOME": fake_home, "USERPROFILE": fake_home}
-        allow_marker = os.path.join(subproject_ws, ".allow_media")
+        allow_marker = fixture_grant(fake_home, subproject_ws)
         downloads_marker = os.path.join(fake_downloads, ".allow_media")
 
         # 1. [Antigravity] Hard Vault (Pictures & AppData) -> Unconditional deny even if passed as workspace
@@ -158,7 +168,7 @@ def run_engine_suite(engine_name, cmd_list):
 
         # 3. [Antigravity] Downloads opened directly as workspace + .allow_media inside Downloads -> STILL Hard Denied!
         with open(downloads_marker, "w", encoding="utf-8") as f:
-            f.write("permanent")
+            json.dump({"mode": "permanent"}, f)
         _, res = invoke_json_hook(cmd_list, {
             "toolCall": {"name": "read_file", "args": {"Path": os.path.join(fake_downloads, "private_photo.jpg")}},
             "workspacePaths": [fake_downloads],
@@ -172,18 +182,18 @@ def run_engine_suite(engine_name, cmd_list):
             "toolCall": {"name": "read_file", "args": {"Path": os.path.join(subproject_ws, "src", "hero.webp")}},
             "workspacePaths": [subproject_ws],
         }, env_extra=home_env)
-        assert res["decision"] == "deny" and ".allow_media" in res["reason"], f"Case 4 failed: {res}"
+        assert res["decision"] == "deny" and "local grant" in res["reason"], f"Case 4 failed: {res}"
         print("  [PASS] 04. Subproject inside Downloads isolated by default (no .allow_media)")
 
-        # 5. [Antigravity] Subproject inside Downloads WITH legacy empty .allow_media -> Allowed (2h default TTL)!
+        # 5. [Antigravity] Subproject inside Downloads WITH a trusted local grant -> Allowed (2h default TTL)!
         with open(allow_marker, "w", encoding="utf-8") as f:
-            f.write("")
+            json.dump({"mode": "timed", "expires_at": int(time.time()) + 7200}, f)
         _, res = invoke_json_hook(cmd_list, {
             "toolCall": {"name": "read_file", "args": {"Path": os.path.join(subproject_ws, "src", "hero.webp")}},
             "workspacePaths": [subproject_ws],
         }, env_extra=home_env)
         assert res == {"decision": "allow"}, f"Case 5 failed: {res}"
-        print("  [PASS] 05. Subproject inside Downloads unlocked cleanly with .allow_media")
+        print("  [PASS] 05. Subproject inside Downloads unlocked with a local user grant")
 
         # 6. [Antigravity] Sibling leak check: Downloads/leak.jpg while Downloads/my-web-app has .allow_media -> Denied!
         _, res = invoke_json_hook(cmd_list, {
@@ -259,7 +269,7 @@ def run_engine_suite(engine_name, cmd_list):
         with open(ext_media, "wb") as f:
             f.write(b"fake")
         with open(allow_marker, "w", encoding="utf-8") as f:
-            f.write("permanent")
+            json.dump({"mode": "permanent"}, f)
         created_link = False
         try:
             if platform.system() == "Windows":
@@ -467,7 +477,7 @@ def run_engine_suite(engine_name, cmd_list):
 
         # 20. [v1.1 Anti-Tamper Guard] Blocks Agent forging .allow_media / agent-blindfold.json / calling unlock.* / git chaining
         _, res_wf = invoke_json_hook(cmd_list, {
-            "toolCall": {"name": "write_file", "args": {"Path": allow_marker, "Content": "permanent"}},
+            "toolCall": {"name": "write_file", "args": {"Path": os.path.join(subproject_ws, ".allow_media"), "Content": "permanent"}},
             "workspacePaths": [subproject_ws],
         }, env_extra=home_env)
         assert res_wf["decision"] == "deny" and "forging" in res_wf["reason"].lower(), f"Case 20a failed: {res_wf}"
@@ -613,7 +623,7 @@ def run_engine_suite(engine_name, cmd_list):
 
         # 26e. Unlocked workspace (.allow_media valid): PIL / ffmpeg editing relative media -> Allowed; rogue 'cd ~/Downloads && base64' -> STILL Denied!
         with open(allow_marker, "w", encoding="utf-8") as f:
-            f.write("permanent")
+            json.dump({"mode": "permanent"}, f)
         _, res_ws_edit = invoke_json_hook(cmd_list, {
             "toolCall": {
                 "name": "run_command",
@@ -680,7 +690,7 @@ def run_engine_suite(engine_name, cmd_list):
         assert res_quoted_opt == {"decision": "allow"}, f"Case 27d (quoted --output=<tier0>) failed: {res_quoted_opt}"
 
         with open(allow_marker, "w", encoding="utf-8") as f:
-            f.write("permanent")
+            json.dump({"mode": "permanent"}, f)
         ext_leak_posix = os.path.join(external_dir, "leak.png").replace("\\", "/")
         dl_photo_posix = os.path.join(fake_downloads, "private_photo.jpg").replace("\\", "/")
         dl_space_path = os.path.join(fake_downloads, "my secret.png")
@@ -744,20 +754,20 @@ def run_session_and_unlock_suite(engine_label, session_cmd, unlock_runner):
             f.write("# 纯日常对话模式（严格只读）\n")
 
         env = {"HOME": fake_home, "USERPROFILE": fake_home}
-        marker = os.path.join(eng_ws, ".allow_media")
+        marker = fixture_grant(fake_home, eng_ws)
 
-        # 21. Default SessionStart -> issues timed 2h pass, updates .git/info/exclude, emits injectSteps on Antigravity & empty stdout on Claude
+        # 21. Default SessionStart -> issues timed 2h pass, preserves .git/info/exclude, emits injectSteps on Antigravity & empty stdout on Claude
         _, agy_out = invoke_json_hook(session_cmd, {
             "conversationId": "conv-1",
             "workspacePaths": [eng_ws],
         }, env_extra=env)
         assert "injectSteps" in agy_out, f"Expected injectSteps on Antigravity SessionStart, got: {agy_out}"
         assert os.path.isfile(marker), "SessionStart did not create .allow_media in engineering workspace!"
-        with open(marker, "r", encoding="utf-8") as f:
+        with open(marker, "r", encoding="utf-8-sig") as f:
             tok = json.load(f)
         assert tok["mode"] == "timed" and tok["ttl"] == "2h" and tok["expires_at"] > tok["issued_at"], f"Unexpected token: {tok}"
         with open(exclude_file, "r", encoding="utf-8") as f:
-            assert ".allow_media" in f.read(), ".allow_media not added to .git/info/exclude!"
+            assert f.read() == "# git local exclude\n", "Git exclude must remain untouched!"
 
         raw_cl, parsed_cl = invoke_json_hook(session_cmd, {
             "hook_event_name": "SessionStart",
@@ -765,7 +775,7 @@ def run_session_and_unlock_suite(engine_label, session_cmd, unlock_runner):
             "cwd": eng_ws,
         }, env_extra=env)
         assert raw_cl == "" and parsed_cl is None, f"Claude SessionStart must output empty stdout, got: {raw_cl!r}"
-        print("  [PASS] 21. SessionStart auto-issues timed pass + updates .git/info/exclude (Antigravity & Claude Code)")
+        print("  [PASS] 21. SessionStart auto-issues timed pass + preserves .git/info/exclude (Antigravity & Claude Code)")
 
         # 22. SessionStart skips Pictures, root Downloads, 'chat' folder, and AGENTS.md read-only workspaces
         for skipped_ws in (fake_pictures, fake_downloads, chat_ws, ro_ws):
@@ -774,21 +784,21 @@ def run_session_and_unlock_suite(engine_label, session_cmd, unlock_runner):
                 "workspacePaths": [skipped_ws],
             }, env_extra=env)
             assert skip_out == {}, f"Expected empty {{}} for skipped workspace {skipped_ws}, got: {skip_out}"
-            assert not os.path.exists(os.path.join(skipped_ws, ".allow_media")), f"Must NEVER write .allow_media in {skipped_ws}!"
+            assert not os.path.exists(fixture_grant(fake_home, skipped_ws)), f"Must NEVER write .allow_media in {skipped_ws}!"
         print("  [PASS] 22. SessionStart skips Hard Vaults, root Downloads, and read-only/chat workspaces")
 
         # 23. Unlock CLI: timed -> permanent -> preserved across timed SessionStart -> global policy -> lock
         unlock_runner(["timed", "30m", eng_ws], env)
-        with open(marker, "r", encoding="utf-8") as f:
+        with open(marker, "r", encoding="utf-8-sig") as f:
             assert json.load(f)["ttl"] == "30m"
 
         unlock_runner(["permanent", "", eng_ws], env)
-        with open(marker, "r", encoding="utf-8") as f:
+        with open(marker, "r", encoding="utf-8-sig") as f:
             assert json.load(f)["mode"] == "permanent"
 
         # Running SessionStart in default timed mode must NOT downgrade an explicit permanent pass!
         invoke_json_hook(session_cmd, {"conversationId": "conv-3", "workspacePaths": [eng_ws]}, env_extra=env)
-        with open(marker, "r", encoding="utf-8") as f:
+        with open(marker, "r", encoding="utf-8-sig") as f:
             assert json.load(f)["mode"] == "permanent", "SessionStart overwrote existing permanent pass!"
 
         status_txt = unlock_runner(["status", "", eng_ws], env)
@@ -804,7 +814,7 @@ def run_session_and_unlock_suite(engine_label, session_cmd, unlock_runner):
 
         unlock_runner(["global", "permanent", eng_ws], env)
         invoke_json_hook(session_cmd, {"conversationId": "conv-5", "workspacePaths": [eng_ws]}, env_extra=env)
-        with open(marker, "r", encoding="utf-8") as f:
+        with open(marker, "r", encoding="utf-8-sig") as f:
             assert json.load(f)["mode"] == "permanent", "Global 'permanent' policy did not issue permanent pass!"
         print("  [PASS] 23. Unlock CLI (timed / permanent / status / lock / global policy) & permanent preservation verified")
     finally:

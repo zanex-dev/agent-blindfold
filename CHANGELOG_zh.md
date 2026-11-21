@@ -8,6 +8,34 @@
 
 ---
 
+## [1.2.0] - 2026-11-21 — 本机用户级许可库、故障关闭加固与模块化 Python 引擎
+
+### ✨ 新增与架构升级
+- **本机用户级私有许可库（`scripts/grant_store.ps1` & `scripts/grant_store.py`）**：
+  - 将工程媒体豁免许可从项目目录迁移至当前用户私有目录（`~/.gemini/config/agent-blindfold-grants/`），以工程规范真实路径作为唯一身份标识，内置符号链接/重解析点校验、并发文件锁与原子写入。
+  - 签发、续期与撤销许可全程不修改工程文件与 `.git/info/exclude`，天然保持普通仓库、Git 链接工作树（worktree）与子模块（`.git` 文件指针布局）工作区干净。
+  - Windows PowerShell 与 Python 双引擎对含中文、空格的同一工程路径完全互认，并严格拒绝将磁盘根目录或空路径作为工程目标。
+- **模块化 Unix Python 3.9+ 引擎与运行时探测（`scripts/guard.py`、`scripts/session_start.py`、`scripts/unlock.py`、`scripts/python_runtime.sh`）**：
+  - 将原 Unix 内联脚本拆分为结构清晰的 Python 3.9+ 模块与轻量 Bash 入口封装（`guard.sh`、`session_start.sh`、`unlock.sh`）。
+  - 按优先级探测已激活的虚拟环境、PATH 上可实际执行的解释器（在 Windows Git Bash 下自动跳过无解释器的 `WindowsApps` 空别名）与 `py -3` 启动器，且确保钩子本体只执行一次。
+- **新增 28 项本机许可与宿主集成回归测试（`tests/test_local_grants.py`）**：
+  - 全面覆盖本机许可库、忽略旧 `.allow_media`、Git 文件指针工作树、损坏策略暂停签发、宿主定向故障关闭、无损混合钩子安装/卸载及跨引擎互认。
+
+### 🛠️ 修复与加固
+- **忽略随仓库附带的旧 `.allow_media` 与损坏策略故障关闭（升级提示）**：
+  - 项目内原有的 `.allow_media` 文件现被统一忽略且保留原样，彻底杜绝克隆外部仓库时携带自解锁标记的供应链风险；如需继续保留手工授权，请使用本机控制器（`unlock.ps1` / `unlock.sh` / `blindfold-control.cmd`）重新签发。
+  - 全局策略 `~/.gemini/config/agent-blindfold.json` 出现 JSON 语法损坏或非法顶层类型时，自动暂停新许可签发并输出诊断，不再静默回退为自动放行。
+- **显式宿主协议绑定与故障关闭拦截（`hooks.json`、`scripts/guard.ps1`、`scripts/guard.sh`、`scripts/guard.py`）**：
+  - 安装后的入口显式绑定目标宿主（`-HookHost antigravity|claude` 或 `antigravity|claude`）；遇到空消息、损坏 JSON 或缺失 Python 3.9+ 运行时时，按目标宿主协议返回明确 `deny` 决策与诊断信息，杜绝异常静默放行。
+- **无损精准合并与卸载 Claude Code 钩子（`scripts/claude_settings.py`、`install.ps1`、`install.sh`）**：
+  - 安装、升级与卸载仅精确匹配 `agent-blindfold` 自身注册的命令，完整保留同组第三方钩子、matcher 与顺序；卸载 Claude 钩子先成功写回宿主配置后再移除脚本，且仅在最后一个宿主卸载完毕后才清理本机许可库与全局策略。
+- **统一策略解析与状态诊断（`scripts/unlock.ps1`、`scripts/unlock.py`）**：
+  - `-Status` / `--status` 与 `SessionStart` 共用同一套策略解析逻辑，准确展示生效模式、TTL、环境变量覆盖来源，并在存在已忽略的旧 `.allow_media` 文件时作出明确提示。
+- **Windows 批读场景性能优化（`scripts/guard.ps1`）**：
+  - 在单次守卫进程内复用规范路径与固定控制目录解析结果（绝不跨请求残留），在 100 个 Markdown 文件单次批读基准测试中将总耗时中位数由约 `4.72s` 降至约 `1.10s`（提升约 4.3 倍）。
+
+---
+
 ## [1.1.2] - 2026-11-11 — Windows 编译器开关崩溃修复与终端子命令/参数前缀防绕过加固
 
 ### 🛠️ 修复与加固

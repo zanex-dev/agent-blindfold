@@ -6,7 +6,7 @@
 
 ### *"Keep your AI Agent's eyes on the code, not on your private stash."*
 
-**项目代号：`Heart-Under-Blade` (`刃下心`) · v1.1**
+**项目代号：`Heart-Under-Blade` (`刃下心`) · v1.2.0**
 
 [![CI](https://github.com/zanex-dev/agent-blindfold/actions/workflows/ci.yml/badge.svg)](https://github.com/zanex-dev/agent-blindfold/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-gold.svg)](./LICENSE)
@@ -18,6 +18,13 @@
 
 </div>
 
+### ✨ v1.2.0 架构升级（本机用户级许可库与故障关闭加固）
+工程豁免许可现独立存放在当前用户的私有目录（`~/.gemini/config/agent-blindfold-grants/`），以工程规范真实路径作为身份标识。新建、续期或撤销许可均不触碰项目文件与 Git 元数据，天然保持普通仓库、链接工作树（worktree）与子模块（submodule）工作区纯净。
+
+Bash 入口需要 Python 3.9 或更新版本，会自动按顺序探测已激活的虚拟环境、PATH 上实际可用的解释器（在 Windows Git Bash 下自动跳过无解释器的 WindowsApps 空别名）及 Windows Python 启动器；若缺失解释器或宿主消息异常，守卫会按故障关闭（Fail-Closed）原则返回宿主可识别的拒绝决策。
+
+**从 v1.1.x 升级已有工程：** 项目目录内遗留的 `.allow_media` 文件将被忽略并保留原样，防止第三方仓库随包夹带“自解锁标记”。需要保留手工授权的工程请核对路径，通过本机控制器（`unlock.ps1` / `unlock.sh` / `blindfold-control.cmd`）重新签发限时或永久许可。默认 `timed` 策略仍会在每次合格工程会话开始时按全局配置自动续签；若希望每个工程都经人工确认，请设为 `off`（已签发的本机许可可单独撤销）。损坏的全局策略文件会自动暂停新签发而非回退为自动放行；状态页统一展示当前进程实际生效的策略、TTL 与环境变量覆盖来源。
+
 ---
 
 ## ⚡ 为什么需要 `agent-blindfold`？（隐私保护与防误封护盾）
@@ -28,9 +35,9 @@
 1. **不可逆的个人隐私泄露**：当派发多个子智能体（Subagents）并发扫描目录、或长上下文导致模型注意力衰减时，Agent 极易在遍历目录时误读 `Pictures`、`Downloads`、`Desktop` 或 `AppData`（微信/Telegram/浏览器缓存）中的私人照片、截图或视频。多模态数据一旦上云便不可撤回。
 2. **云端风控误判与高价值账号封禁风险（Anti-Ban Shield）**：海外云端大模型接口对上传的视觉素材有着极其严苛的自动化安全审查机制。一旦 Agent 在扫盘时误读了你本地硬盘里的二次元插画（例如《物语系列》忍野忍插画、动漫壁纸、游戏拆包 CG 等），极易触发云端审核模型的误判，直接导致高价值的开发者账号或订阅额度被**无预警封禁**。
 
-**`agent-blindfold`（代号：`Heart-Under-Blade / 刃下心`）v1.1** 提供**“软硬双层零信任防护 + 前端工程无感自动豁免”**：
+**`agent-blindfold`（代号：`Heart-Under-Blade / 刃下心`）v1.2** 提供**“软硬双层零信任防护 + 前端工程无感自动豁免”**：
 - **第一层：软约束提示词纪律（`rules/AGENTS.md`）**：随插件自动注入，明确划清私人禁区与前端工程沙盒边界，避免无谓消耗 Token。
-- **第二层：系统级物理防火墙（`SessionStart` + `PreToolUse` 双钩子）**：在工程会话启动时自动按策略下发**限时（TTL，默认 `2h`）**或**永久（`permanent`）**媒体豁免通行证，原生自动豁免 `scratch` 工程沙盒、当前会话 `brain` 产物目录、`.playwright-mcp` 网页截图与 `.svg` 矢量代码，并在底层一票否决私人目录访问与 Agent 自解锁篡改行为。
+- **第二层：宿主工具调用守卫（`SessionStart` + `PreToolUse` 双钩子）**：在工程会话启动时自动按策略下发**限时（TTL，默认 `2h`）**或**永久（`permanent`）**媒体豁免通行证，原生自动豁免 `scratch` 工程沙盒、当前会话 `brain` 产物目录、`.playwright-mcp` 网页截图与 `.svg` 矢量代码，并在底层一票否决私人目录访问与 Agent 自解锁篡改行为。
 
 ---
 
@@ -39,7 +46,7 @@
 ```mermaid
 flowchart TD
     S["SessionStart 会话启动钩子<br/>(session_start.ps1 / session_start.sh)"] --> S1{"是否为独立工程工作区?<br/>(自动跳过私人目录与纯聊天只读目录)"}
-    S1 -- "是" --> S2["自动下发 .allow_media 通行证<br/>(可选限时 TTL 默认 2h / 永久放行)<br/>+ 自动写入 .git/info/exclude"]
+    S1 -- "是" --> S2["在用户目录签发工程许可<br/>(可选限时 TTL 默认 2h / 永久放行)<br/>工程与 Git 元数据不变"]
 
     A["Agent 发起工具调用<br/>(read_file / Read / Write / MCP / run_command / Bash)"] --> T{"防自解锁护盾 (Anti-Tamper):<br/>是否试图伪造/修改 .allow_media 或策略文件?"}
     T -- "是 (写入/篡改/调用 unlock)" --> DENYT["🚫 HARD DENY 无条件拦截<br/>(严防 Agent 越权自解锁)"]
@@ -51,7 +58,7 @@ flowchart TD
     E0 -- "是 (已通过真实符号链接校验)" --> ALLOW
     E0 -- "否" --> E{"第二级：是否位于独立的<br/>当前活跃项目工作区内?"}
     E -- "否 (跨盘符外部路径 / 父目录旁路文件)" --> DENY2["🚫 HARD DENY 无条件拦截<br/>(外部目录物理隔离)"]
-    E -- "是" --> F{"第三级：是否存在有效 .allow_media 通行证?<br/>(永久通行证 或 未过期的限时 TTL 通行证)"}
+    E -- "是" --> F{"第三级：是否存在有效的本机工程许可?<br/>(永久通行证 或 未过期的限时 TTL 通行证)"}
     F -- "无 / 已过期 (自动清理回收)" --> DENY3["🔒 DEFAULT DENY 默认拦截<br/>(阻断读取与命令行转码偷看;<br/>放行安全 Git 操作)"]
     F -- "有效" --> ALLOW
 ```
@@ -67,10 +74,10 @@ flowchart TD
 | **第一级：核心私人禁区** | `Pictures`, `Videos`, `Music`, `AppData`，以及直接访问或直接设为工作区的 `Desktop`, `Downloads`, `Documents` | **无条件 `deny`** | 物理焊死——哪怕误把整个 `Downloads` 设为工作区并放入 `.allow_media`、或在沙盒内建符号链接指向 `Pictures`，也绝不放行。 |
 | **第零级：工程与前端沙盒** | `~/.gemini/antigravity/scratch/<子项目>`、当前对话专属 `brain/<当前会话ID>`、工作区内 `.playwright-mcp/` 截图 | **原生自动豁免 (`allow`)** | 即使未挂载 Active Workspace，在 `scratch` 新建前端项目、生成产物或用 Playwright 截图自检 UI 均自动畅行；同时严密阻断跨会话读取其他窗口的 `.user_uploaded/` 附件。 |
 | **第二级：外部目录隔离** | 不在当前独立项目工作区（`workspacePaths` / `cwd`）内的任何本地路径 | **无条件 `deny`** | 严防跨盘符越界读取、`../` 目录穿越、符号链接逃逸及同级私人文件泄露。 |
-| **第三级：独立工程工作区** | 具体工程目录内的项目素材（智能兼容 `~/Downloads/my-app` 或 `~/Desktop/my-app` 子工程，自动跳过 `chat` 纯聊天目录） | **`SessionStart` 自动下发（限时/永久可选）** | 工作开始时自动按全局配置下发限时（默认 `2h`）或永久 `.allow_media` 通行证；限时到期后自动失效清理，也可设为 `off` 纯手动授权模式。 |
+| **第三级：独立工程工作区** | 具体工程目录内的项目素材（智能兼容 `~/Downloads/my-app` 或 `~/Desktop/my-app` 子工程，自动跳过 `chat` 纯聊天目录） | **`SessionStart` 自动下发（限时/永久可选）** | 工作开始时自动按全局配置下发限时（默认 `2h`）或永久本机工程许可；限时到期后自动失效清理，也可设为 `off` 纯手动授权模式。 |
 
 ### 内置防绕过与防越权加固
-- **防 Agent 自解锁护盾（Anti-Tamper Guard）**：全面拦截 `write_file`、`edit_file`、`Write`、`Edit`、`MultiEdit`、MCP 写文件工具以及终端命令，严禁 AI Agent 自行创建、篡改、伪造 `.allow_media`、`agent-blindfold.json` 或私自调用 `unlock.ps1` / `unlock.sh`。
+- **防 Agent 自解锁护盾（Anti-Tamper Guard）**：全面拦截 `write_file`、`edit_file`、`Write`、`Edit`、`MultiEdit`、MCP 写文件工具以及终端命令，严禁 AI Agent 自行创建、篡改、伪造本机许可库（`agent-blindfold-grants/`）、旧式 `.allow_media`、`agent-blindfold.json` 或私自调用 `unlock.ps1` / `unlock.sh`。
 - **终端命令防绕过（`run_command` & `Bash`）**：自动拦截针对 `Pictures`/`Videos`/`Music` 的目录枚举，拦截触碰外部/私人媒体的命令，阻断 `git status && base64 a.png` 链式命令伪装，并拦截未授权时使用 `base64`、`certutil`、`xxd`、`PIL`、`cv2`、`ffmpeg`、`magick`、`tesseract` 转码偷看图片，同时确保纯粹的 `git status`、`git add`、`git commit` 畅通无阻。
 - **MCP 深度解析与 URI 归一化**：穿透检查 `call_mcp_tool` 嵌套参数（`markitdown`、`filesystem`、`playwright`），自动解码 `file://` URL 编码（`%20`）、剥离 NTFS `::$DATA` 备用数据流、解析真实符号链接目标，并精准放行公网 `https://` 链接。
 - **Claude Code 零权限劫持**：在 Claude Code 下放行工具与 `SessionStart` 事件时采用“退出码 `0` + 空 `stdout`”官方中立透传规范，绝不覆盖用户原有的 `Bash` 权限确认弹窗。
@@ -127,7 +134,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall
 
 ## 🔓 限时与永久豁免自由切换（`unlock` 控制器与一键面板）
 
-你可以随时在本地终端运行 `unlock` 脚本，或在 Windows 下直接双击运行 **`blindfold-control.cmd`** 打开交互式控制面板，为指定工程切换**限时（TTL）**或**永久（Permanent）**豁免（通行证会自动写入 `.git/info/exclude`，绝不污染 `git status`）：
+你可以随时在本地终端运行 `unlock` 脚本，或在 Windows 下直接双击运行 **`blindfold-control.cmd`** 打开交互式控制面板，为指定工程切换**限时（TTL）**或**永久（Permanent）**豁免（通行证保存在当前用户目录）：
 
 ### Windows PowerShell (`scripts/unlock.ps1`)
 ```powershell
@@ -166,10 +173,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\unlock.ps1 -GlobalAutoGrant p
 
 ## 🧪 运行自动化安全测试套件
 
-仓库内置零第三方依赖的跨平台端到端安全测试、`SessionStart` 自动签发测试与沙盒安装/卸载验证套件（`tests/run_tests.py`）：
+仓库内置零第三方依赖的跨平台端到端安全测试、本机用户级许可库集成测试与沙盒安装/卸载验证套件（`tests/run_tests.py` 与 `tests/test_local_grants.py`）：
 
 ```bash
 python tests/run_tests.py
+python -m unittest discover -s tests -p test_local_grants.py -v
 ```
 
 ---
@@ -179,34 +187,42 @@ python tests/run_tests.py
 ```text
 agent-blindfold/
 ├── .github/workflows/
-│   └── ci.yml                 # GitHub Actions 三大操作系统矩阵 CI (Windows / Ubuntu / macOS)
+│   └── ci.yml                   # GitHub Actions 三大操作系统矩阵 CI (Windows / Ubuntu / macOS)
 ├── assets/
-│   └── shinobu-banner.svg     # 顶部矢量横幅配图 (Heart-Under-Blade / 刃下心)
+│   └── shinobu-banner.svg       # 顶部矢量横幅配图 (Heart-Under-Blade / 刃下心)
 ├── docs/
-│   └── v1.1-exemption-design.md # v1.1 自动豁免与防越权架构设计规范
+│   └── v1.1-exemption-design.md # v1.1 历史架构设计文档
 ├── rules/
-│   └── AGENTS.md              # 第一层提示词媒体隔离软规则 (随 Antigravity 插件自动生效)
+│   └── AGENTS.md                # 第一层提示词媒体隔离软规则 (随 Antigravity 插件自动生效)
 ├── scripts/
-│   ├── guard.ps1              # Windows PowerShell 物理防火墙引擎 + 防自解锁护盾
-│   ├── guard.sh               # macOS / Linux 物理防火墙引擎 + 防自解锁护盾
-│   ├── session_start.ps1      # Windows 会话启动自动豁免签发引擎 (支持限时/永久)
-│   ├── session_start.sh       # macOS / Linux 会话启动自动豁免签发引擎
-│   ├── unlock.ps1             # Windows 通行证签发与全局策略控制器 (CLI + 交互菜单)
-│   └── unlock.sh              # macOS / Linux 通行证签发与全局策略控制器
+│   ├── grant_store.ps1          # Windows 本机用户级许可库、规范路径与文件锁模块
+│   ├── grant_store.py           # 跨平台 Python 本机用户级许可库与策略解析模块
+│   ├── guard.ps1                # Windows PowerShell 物理防火墙引擎 + 防自解锁护盾
+│   ├── guard.py                 # 跨平台 Python 物理防火墙引擎 + 防自解锁护盾
+│   ├── guard.sh                 # Unix Bash 入口封装（含故障关闭兜底）
+│   ├── session_start.ps1        # Windows 会话启动自动豁免签发引擎 (支持限时/永久)
+│   ├── session_start.py         # 跨平台 Python 会话启动自动豁免签发引擎
+│   ├── session_start.sh         # Unix Bash 会话启动入口封装
+│   ├── unlock.ps1               # Windows 通行证签发与全局策略控制器 (CLI + 交互菜单)
+│   ├── unlock.py                # 跨平台 Python 通行证签发与全局策略控制器
+│   ├── unlock.sh                # Unix Bash 控制器入口封装
+│   ├── claude_settings.py       # Claude Code settings.json 无损精准钩子合并器
+│   └── python_runtime.sh        # Python 3.9+ 运行时探测脚本（跳过 WindowsApps 空别名）
 ├── tests/
-│   └── run_tests.py           # 跨平台双引擎安全、自动豁免与沙盒安装器自动化测试套件
-├── blindfold-control.cmd      # Windows 本地一键打开交互式豁免控制面板启动器
-├── .gitattributes             # 跨平台行尾符锁死契约 (.sh 强制 LF / .ps1 与 .cmd 强制 CRLF)
-├── hooks.json                 # Antigravity 原生 SessionStart + PreToolUse Hook 清单
-├── plugin.json                # Antigravity 原生插件清单
-├── install.ps1                # Windows 幂等一键安装与无损卸载脚本
-├── install.sh                 # macOS / Linux 幂等一键安装与无损卸载脚本
-├── SECURITY.md                # 威胁模型边界说明与漏洞披露指南
-├── CHANGELOG_zh.md            # 简体中文版本演进日志
-├── CHANGELOG.md               # 英文版本演进日志
-├── README.md                  # 英文主文档
-├── README_zh.md               # 简体中文说明文档
-└── LICENSE                    # MIT 开源协议
+│   ├── run_tests.py             # 跨平台双引擎安全、自动豁免与沙盒安装器自动化测试套件
+│   └── test_local_grants.py     # 本机许可库、故障关闭与宿主集成回归测试套件
+├── blindfold-control.cmd        # Windows 本地一键打开交互式豁免控制面板启动器
+├── .gitattributes               # 跨平台行尾符锁死契约 (.sh/.py 强制 LF / .ps1 与 .cmd 强制 CRLF)
+├── hooks.json                   # Antigravity 原生 SessionStart + PreToolUse Hook 清单
+├── plugin.json                  # Antigravity 原生插件清单
+├── install.ps1                  # Windows 幂等一键安装与无损卸载脚本
+├── install.sh                   # macOS / Linux 幂等一键安装与无损卸载脚本
+├── SECURITY.md                  # 威胁模型边界说明与漏洞披露指南
+├── CHANGELOG_zh.md              # 简体中文版本演进日志
+├── CHANGELOG.md                 # 英文版本演进日志
+├── README.md                    # 英文主文档
+├── README_zh.md                 # 简体中文说明文档
+└── LICENSE                      # MIT 开源协议
 ```
 
 ---
