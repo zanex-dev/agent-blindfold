@@ -7,7 +7,7 @@
 .AUTHOR
     zanex-dev - https://github.com/zanex-dev
 .LICENSE
-    MIT License - Copyright (c) 2026 zanex
+    PolyForm Noncommercial License 1.0.0 - Copyright (c) 2026 zanex
 #>
 
 param([ValidateSet('auto','claude','antigravity')][string]$HookHost = 'auto')

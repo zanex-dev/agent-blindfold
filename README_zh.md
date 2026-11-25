@@ -9,7 +9,7 @@
 **项目代号：`Heart-Under-Blade` (`刃下心`) · v1.2.0**
 
 [![CI](https://github.com/zanex-dev/agent-blindfold/actions/workflows/ci.yml/badge.svg)](https://github.com/zanex-dev/agent-blindfold/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-gold.svg)](./LICENSE)
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-gold.svg)](./LICENSE)
 [![Antigravity](https://img.shields.io/badge/Google_Antigravity-原生插件与_Hook-4285F4.svg)](#快速开始与一键安装)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-SessionStart_%2B_PreToolUse-D97757.svg)](#快速开始与一键安装)
 [![Platform](https://img.shields.io/badge/Platform-Windows_%7C_macOS_%7C_Linux-success.svg)](#智能四级防御与自动豁免架构)
@@ -222,12 +222,12 @@ agent-blindfold/
 ├── CHANGELOG.md                 # 英文版本演进日志
 ├── README.md                    # 英文主文档
 ├── README_zh.md                 # 简体中文说明文档
-└── LICENSE                      # MIT 开源协议
+└── LICENSE                      # PolyForm Noncommercial 1.0.0 非商用协议
 ```
 
 ---
 
-## 📜 开源协议 (License)
+## 📜 许可协议 (License)
 
-本项目基于 [MIT License](./LICENSE) 开源发布。  
-`Copyright (c) 2026 琢玹 (zanex)`
+本项目基于 [PolyForm Noncommercial License 1.0.0](./LICENSE)（`PolyForm-Noncommercial-1.0.0`）发布 —— **个人学习、自用与非营利研究免费开放；严禁将本项目代码或 `assets/` 视觉头图及美术素材用于任何商业用途、付费服务、打包倒卖或二次售卖**，商业授权请联系作者 zanex-dev。  
+`Required Notice: Copyright (c) 2026 琢玹 (zanex-dev) (https://github.com/zanex-dev/agent-blindfold)`
